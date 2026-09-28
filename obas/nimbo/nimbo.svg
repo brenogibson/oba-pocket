@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-160 -116 320 240" width="320" height="240">
+  <!-- Nimbo: a origem é o centro do Oba na tela (160, 116). O contorno que vai
+       para o oba.json é o path id="outline" (tools/svg_to_outline.py). -->
+  <rect x="-160" y="-116" width="320" height="240" fill="#5DB8F5"/>
+  <ellipse cx="0" cy="78" rx="60" ry="7" fill="#3A8FD0"/>
+  <path id="outline" fill="#FFFFFF"
+        d="M -57 54 A 35 35 0 0 1 -61.54 -15.7 A 43 43 0 0 1 16.36 -46.47 A 38 38 0 0 1 67.93 -8.73 A 32 32 0 0 1 59 54 Z"/>
+  <ellipse cx="-22" cy="-8" rx="9" ry="13" fill="#1B2A4A"/>
+  <ellipse cx="22" cy="-8" rx="9" ry="13" fill="#1B2A4A"/>
+  <ellipse cx="-36" cy="12" rx="7" ry="4" fill="#FFA8C5"/>
+  <ellipse cx="36" cy="12" rx="7" ry="4" fill="#FFA8C5"/>
+</svg>

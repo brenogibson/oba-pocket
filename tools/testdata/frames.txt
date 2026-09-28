@@ -1,0 +1,24 @@
+# Quadros fixos para conferir o desenho (comandos "p" e "h" do tools/monitor.py). Um por linha:
+# nome humor ms olharX olharY lado extra   (ver freezeShot em src/main.cpp)
+idle          idle   20000  0    0    1  -
+idle-lu       idle   20000 -1   -0.6  1  -
+idle-rd       idle   20250  0.8  0.6  1  -
+idle-mirror   idle   21300  0.5 -0.3 -1  -
+idle-touch    idle   20000  0.3  0.2  1  touch
+turn-right    idle   22000  0    0    1  turn
+turn-left     happy  22100  0    0   -1  turn
+happy         happy  20100  0    0    1  -
+happy-b       happy  20370  0    0   -1  -
+scared        scared 20000  0    0    1  -
+scared-m      scared 20500  0    0   -1  -
+shy           shy    20000  0    0    1  -
+shy-m         shy    20300  0    0   -1  -
+dizzy         dizzy  20000  0    0    1  -
+dizzy-b       dizzy  20640  0    0   -1  -
+sleepy        sleepy 20000  0    0    1  -
+sleepy-z      sleepy 21700  0    0   -1  -
+sleepy-closed sleepy 20000  0    0    1  closed
+bubble-text   idle   20000  1   -0.3  1  text
+bubble-long   happy  20150  1   -0.3  1  long
+bubble-qr0    idle   20000  1   -0.3  1  qr0
+bubble-qr1    idle   20000  1   -0.3  1  qr1

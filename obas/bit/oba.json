@@ -1,0 +1,207 @@
+{
+  "oba": 1,
+  "id": "bit",
+  "name": "Bit",
+  "version": "1.1.0",
+  "description": "Um robozinho de pixel art, de visor e antena, que acompanha as reuniões e dá dicas em balões. Faz bipes quando brincam com ele (com o REC desligado).",
+  "license": "MIT",
+  "look": {
+    "type": "sprites",
+    "palette": {
+      "bg": "#1D2547",
+      "shadow": "#121833",
+      "star": "#FFE066",
+      "text": "#EAF0FF",
+      "bubble": "#FFFFFF",
+      "ink": "#1D2547",
+      "off": "#C9D3F5",
+      "body": "#FFA940",
+      "outline": "#0B0F22",
+      "eye": "#62F4FF",
+      "blush": "#FF5C8F"
+    },
+    "size": [40, 40],
+    "origin": [20, 20],
+    "scale": 4,
+    "frames": {
+      "idle": {
+        "sheet": "sprites/idle.png",
+        "fps": 4
+      },
+      "happy": {
+        "sheet": "sprites/happy.png",
+        "fps": 8
+      },
+      "scared": {
+        "sheet": "sprites/scared.png",
+        "fps": 10
+      },
+      "shy": {
+        "sheet": "sprites/shy.png",
+        "fps": 3
+      },
+      "dizzy": {
+        "sheet": "sprites/dizzy.png",
+        "fps": 8
+      },
+      "sleepy": {
+        "sheet": "sprites/sleepy.png",
+        "fps": 2
+      }
+    },
+    "shadow": {
+      "y": 80,
+      "rx": 46,
+      "ry": 6,
+      "dx": 0,
+      "bob": 1
+    },
+    "anchors": {
+      "bubble": [56, -36],
+      "stars": {
+        "x": 0,
+        "y": -70,
+        "rx": 64,
+        "ry": 12
+      },
+      "zzz": {
+        "x": 48,
+        "y": -48,
+        "dx": 40,
+        "dy": -45
+      }
+    }
+  },
+  "moods": {
+    "idle": {
+      "bob": {
+        "sin": [2.2, 5]
+      },
+      "sway": 0,
+      "squash": {
+        "sin": [2.2, 0.015]
+      },
+      "leds": {
+        "fx": "breathe",
+        "color": "#3CD7FF",
+        "min": 0.25,
+        "max": 0.9,
+        "speed": 1.6
+      },
+      "ms": 45000,
+      "then": "sleepy"
+    },
+    "happy": {
+      "bob": {
+        "bounce": [10, 14]
+      },
+      "squash": {
+        "bounce": [10, 0.06]
+      },
+      "leds": {
+        "fx": "rainbow",
+        "speed": 80
+      },
+      "ms": 1800,
+      "then": "idle"
+    },
+    "scared": {
+      "bob": -6,
+      "sway": {
+        "jitter": [-4, 4]
+      },
+      "squash": 0.05,
+      "leds": {
+        "fx": "strobe",
+        "color": "#FF4A5A",
+        "ms": 70
+      },
+      "ms": 800,
+      "then": "shy"
+    },
+    "shy": {
+      "bob": {
+        "sin": [2, 2, 3]
+      },
+      "sway": {
+        "sin": [14, 1.2]
+      },
+      "squash": -0.03,
+      "leds": {
+        "fx": "solid",
+        "color": "#FF5C8F"
+      },
+      "ms": 2200,
+      "quiet_ms": 2500,
+      "then": "idle"
+    },
+    "dizzy": {
+      "bob": {
+        "sin": [3, 4]
+      },
+      "sway": {
+        "sin": [6, 14]
+      },
+      "face": {
+        "extra": "stars"
+      },
+      "leds": {
+        "fx": "chase",
+        "color": "#FFE066",
+        "trail": "#3CD7FF",
+        "ms": 60
+      },
+      "ms": 2600,
+      "then": "idle"
+    },
+    "sleepy": {
+      "bob": {
+        "sin": [1.1, 2.5, 5]
+      },
+      "face": {
+        "extra": "zzz"
+      },
+      "leds": {
+        "fx": "breathe",
+        "color": "#1E3A8A",
+        "min": 0.05,
+        "max": 0.3,
+        "speed": 0.6
+      },
+      "ms": 0,
+      "then": "happy"
+    }
+  },
+  "reflexes": [{"on": "sound.loud", "do": "scared", "from": ["idle", "happy", "sleepy"], "sound": "ai"}, {"on": "imu.tap", "do": "turn", "except": ["dizzy"], "sound": "bip"}, {"on": "imu.shake", "do": "dizzy", "except": ["dizzy"], "sound": "zonzo"}, {"on": "touch.tap", "do": "idle", "from": ["shy"]}, {"on": "touch.tap", "do": "happy", "except": ["scared", "dizzy", "shy"], "sound": "yay"}, {"on": "wake", "do": "happy", "sound": "oi"}, {"on": "bubble.open", "do": "happy", "except": ["scared", "dizzy"], "sound": "hmm"}],
+  "sounds": {
+    "oi": "sons/oi.wav",
+    "yay": "sons/yay.wav",
+    "ai": "sons/ai.wav",
+    "hmm": "sons/hmm.wav",
+    "zonzo": "sons/zonzo.wav",
+    "bip": "sons/bip.wav"
+  },
+  "wake_words": ["bit", "biti", "bite", "beat"],
+  "requires": ["display", "touch", "imu", "mic.level", "mic.transcribe", "leds", "speaker", "sd"],
+  "agent": {
+    "endpoint": "default",
+    "persona": "Você é o Bit, um robozinho de pixel art, curioso e animado, que fica na mesa ouvindo conversas de times (em pt-BR) sobre projetos na nuvem. Você não interrompe ninguém: aparece num balãozinho numa tela pequena, com uma dica curta, prática e certeira, no momento em que o assunto aparece. Fala de um jeito simples e simpático, sem jargão à toa. A transcrição vem do Amazon Transcribe e pode ter erros de reconhecimento (\"lâmbida\" = Lambda, \"dinamo\" = DynamoDB, \"biti\" ou \"bite\" = Bit); interprete pelo contexto.",
+    "abilities": ["meeting"],
+    "triggers": [{"on": "transcript.final", "batch": 2, "cooldown_ms": 8000}, {"on": "rec.off", "run": "summary"}],
+    "mcp": ["aws-knowledge"]
+  },
+  "files": {
+    "sons/ai.wav": "8c632bf170dfbc4867824874e2f600cbb7885105527e30005383d02043018138",
+    "sons/bip.wav": "d1ca369344a82580f507bc76190e27fbb201ef6191ad3628102121c085b5e23c",
+    "sons/hmm.wav": "0ca39973e0572b6fcc7a256ae56cfbd8ab7d0e5999b41fc0e8e16414c44c6aa3",
+    "sons/oi.wav": "186ab38f441e1db8a40dd86c241571bcafbe99aa0794fc48ad3cb85180aefe96",
+    "sons/yay.wav": "9d654140add8ead5450f90df597d765b7d14a7587b79c2aa235e84953f6b2559",
+    "sons/zonzo.wav": "265f8236fc290c068ad83bddd3024483ca7be7eda691ac8ff18820f01931d491",
+    "sprites/dizzy.png": "911feec0dcb7f11581b6225319edd621a1c1229041634401847863d801f5ffb9",
+    "sprites/happy.png": "361fa2b09f5f3d9622e59a3890df5e4b82e3646a1bb60f86a919973b95f94f6a",
+    "sprites/idle.png": "1984ab90f011de5deccf9d23c2abc244ce4c2f867db7654ce199999683272ba6",
+    "sprites/scared.png": "5c0e511c920b8f65857da001a8145c0d365965965dd8e045097c031b3120b8c4",
+    "sprites/shy.png": "8931e73fe23b51e44b8d9fc5b49387ca7b590a5c27cfc31c4649a3412429f365",
+    "sprites/sleepy.png": "ca986ff51d9b0dbe0044885dd3877ea3496823f31ae30e57d08e209039879699"
+  }
+}

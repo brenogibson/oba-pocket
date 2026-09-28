@@ -1,0 +1,377 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/brenogibson/oba-pocket/schema/oba.schema.json",
+  "title": "Oba",
+  "description": "Um Oba do Oba Pocket: corpo (look), humores, reflexos e o agente que é o cérebro dele. Coordenadas em pixels, relativas ao centro do Oba, com y para baixo.",
+  "type": "object",
+  "required": ["oba", "id", "name", "look"],
+  "additionalProperties": false,
+  "properties": {
+    "oba": { "const": 1, "description": "Versão do formato" },
+    "id": { "type": "string", "pattern": "^[a-z0-9_-]{1,31}$", "description": "Também é o nome da pasta no cartão" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "version": { "type": "string", "maxLength": 20 },
+    "description": { "type": "string" },
+    "author": { "type": "string" },
+    "license": { "type": "string" },
+    "look": { "$ref": "#/$defs/look" },
+    "moods": {
+      "type": "object",
+      "description": "Só o que muda em relação ao padrão do motor",
+      "additionalProperties": false,
+      "properties": {
+        "idle": { "$ref": "#/$defs/mood" },
+        "scared": { "$ref": "#/$defs/mood" },
+        "shy": { "$ref": "#/$defs/mood" },
+        "happy": { "$ref": "#/$defs/mood" },
+        "dizzy": { "$ref": "#/$defs/mood" },
+        "sleepy": { "$ref": "#/$defs/mood" }
+      }
+    },
+    "reflexes": {
+      "type": "array",
+      "description": "O primeiro que casa com o evento no humor atual ganha. Sem a chave, vale a tabela padrão do motor.",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/reflex" }
+    },
+    "sounds": {
+      "type": "object",
+      "description": "Nome do som -> WAV na pasta do Oba (PCM, 1 canal, 16000 Hz, 16 bits, até 10 s; todos juntos até 512 KB de PCM). Precisa de \"speaker\" em requires e de cada arquivo em files.",
+      "maxProperties": 16,
+      "propertyNames": { "$ref": "#/$defs/sound_name" },
+      "additionalProperties": { "$ref": "#/$defs/path" }
+    },
+    "wake_words": {
+      "type": "array",
+      "description": "O nome do Oba e as grafias que o Transcribe costuma devolver para ele",
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 1, "maxLength": 24 }
+    },
+    "requires": {
+      "type": "array",
+      "description": "Recursos da placa que o Oba usa",
+      "uniqueItems": true,
+      "items": { "enum": ["display", "touch", "buttons", "imu", "mic.level", "mic.transcribe", "speaker", "leds", "vibration", "battery", "sd"] }
+    },
+    "files": {
+      "type": "object",
+      "description": "Arquivos que vão para a placa junto com o oba.json (caminho relativo -> sha256 em hex minúsculo). Toda folha de look.frames e todo som de sounds precisa estar aqui. Até 63 (64 com o oba.json), cada um até 2 MB, tudo junto até 6 MB.",
+      "maxProperties": 63,
+      "propertyNames": { "$ref": "#/$defs/path", "not": { "const": "oba.json" } },
+      "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+    },
+    "agent": { "$ref": "#/$defs/agent" }
+  },
+  "$defs": {
+    "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+    "mood_name": { "enum": ["idle", "scared", "shy", "happy", "dizzy", "sleepy"] },
+    "pt": { "type": "array", "prefixItems": [{ "type": "number" }, { "type": "number" }], "minItems": 2, "maxItems": 2 },
+    "path": {
+      "type": "string",
+      "description": "Caminho relativo na pasta do Oba: só A-Z a-z 0-9 . _ / -, até 64 caracteres e 4 pastas, sem \"..\" nem \"//\", sem começar com / ou . e sem terminar em /",
+      "maxLength": 64,
+      "pattern": "^(?!.*\\.\\.)(?!.*//)(?!.*/$)(?!(?:[^/]*/){5})[A-Za-z0-9_-][A-Za-z0-9._/-]*$"
+    },
+    "sound_name": { "type": "string", "pattern": "^[a-z0-9_-]{1,31}$" },
+
+    "palette": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bg": { "$ref": "#/$defs/color", "description": "Fundo da tela" },
+        "shadow": { "$ref": "#/$defs/color", "description": "Sombra no chão, do balão e o botão REC" },
+        "body": { "$ref": "#/$defs/color" },
+        "outline": { "$ref": "#/$defs/color", "description": "Contorno dos bracinhos" },
+        "eye": { "$ref": "#/$defs/color" },
+        "blush": { "$ref": "#/$defs/color", "description": "Bochechas" },
+        "star": { "$ref": "#/$defs/color", "description": "Estrelinhas do tonto" },
+        "text": { "$ref": "#/$defs/color", "description": "O \"z\" do sonolento e o texto do botão REC" },
+        "bubble": { "$ref": "#/$defs/color", "description": "Fundo do balão" },
+        "ink": { "$ref": "#/$defs/color", "description": "Texto do balão" },
+        "rec": { "$ref": "#/$defs/color", "description": "Bolinha do REC gravando (padrão #FF3B4E)" },
+        "wait": { "$ref": "#/$defs/color", "description": "Bolinha do REC conectando (padrão #FFC23D)" },
+        "off": { "$ref": "#/$defs/color", "description": "Botão REC desligado (padrão: text)" }
+      }
+    },
+    "shadow": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "y": { "type": "number" },
+        "rx": { "type": "number" },
+        "ry": { "type": "number" },
+        "dx": { "type": "number", "description": "Deslocamento para trás (acompanha o lado para onde ele olha)" },
+        "bob": { "type": "number", "description": "Quanto a sombra muda com o sobe e desce" }
+      }
+    },
+    "anchors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bubble": { "$ref": "#/$defs/pt", "description": "Ponta do rabinho do balão" },
+        "stars": {
+          "type": "object",
+          "description": "Órbita das estrelinhas do tonto",
+          "additionalProperties": false,
+          "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "rx": { "type": "number" }, "ry": { "type": "number" } }
+        },
+        "zzz": {
+          "type": "object",
+          "description": "De onde o \"z\" do sonolento sai (x, y) e quanto ele anda (dx, dy)",
+          "additionalProperties": false,
+          "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "dx": { "type": "number" }, "dy": { "type": "number" } }
+        }
+      }
+    },
+
+    "look": {
+      "description": "O corpo do Oba. type \"rig\" (padrão): polígono com rosto desenhado pelo motor. type \"sprites\": quadros PNG de pixel art.",
+      "if": { "type": "object", "required": ["type"], "properties": { "type": { "const": "sprites" } } },
+      "then": { "$ref": "#/$defs/look_sprites" },
+      "else": { "$ref": "#/$defs/look_rig" }
+    },
+
+    "look_rig": {
+      "type": "object",
+      "required": ["palette", "outline", "eyes"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "rig" },
+        "palette": {
+          "$ref": "#/$defs/palette",
+          "required": ["bg", "shadow", "body", "outline", "eye", "blush", "star", "text", "bubble", "ink"]
+        },
+        "outline": {
+          "type": "array",
+          "description": "Contorno do corpo (tools/svg_to_outline.py gera a partir de um SVG)",
+          "minItems": 3,
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/pt" }
+        },
+        "wave": {
+          "type": "object",
+          "description": "A parte de baixo do corpo balança: abaixo de from, crescendo até from + span",
+          "additionalProperties": false,
+          "properties": {
+            "from": { "type": "number" },
+            "span": { "type": "number", "exclusiveMinimum": 0 },
+            "speed": { "type": "number" },
+            "phase": { "type": "number" }
+          }
+        },
+        "eyes": {
+          "type": "object",
+          "required": ["left", "right", "y"],
+          "additionalProperties": false,
+          "properties": {
+            "left": { "type": "number", "description": "x do olho esquerdo" },
+            "right": { "type": "number" },
+            "y": { "type": "number" },
+            "rx": { "type": "number", "exclusiveMinimum": 0 },
+            "ry": { "type": "number", "exclusiveMinimum": 0 },
+            "look": {
+              "type": "object",
+              "description": "Quanto os olhos andam ao olhar para cada lado (px)",
+              "additionalProperties": false,
+              "properties": {
+                "left": { "type": "number" },
+                "right": { "type": "number" },
+                "y": { "type": "number" }
+              }
+            }
+          }
+        },
+        "cheeks": {
+          "type": "object",
+          "description": "A partir de cada olho (dx para fora)",
+          "additionalProperties": false,
+          "properties": {
+            "dx": { "type": "number" },
+            "dy": { "type": "number" },
+            "rx": { "type": "number" },
+            "ry": { "type": "number" }
+          }
+        },
+        "arms": {
+          "type": "array",
+          "description": "Bracinhos do tímido cobrindo os olhos: [esquerdo, direito], cada um a partir de um olho. Arco de raio r, de from a to (graus, 0 = direita, 270 = cima).",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "dx": { "type": "number" },
+              "dy": { "type": "number" },
+              "r": { "type": "integer", "minimum": 1 },
+              "from": { "type": "number" },
+              "to": { "type": "number" }
+            }
+          }
+        },
+        "shadow": { "$ref": "#/$defs/shadow" },
+        "anchors": { "$ref": "#/$defs/anchors" }
+      }
+    },
+
+    "look_sprites": {
+      "type": "object",
+      "required": ["type", "palette", "size", "origin", "scale", "frames"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "sprites" },
+        "palette": {
+          "$ref": "#/$defs/palette",
+          "required": ["bg", "shadow", "star", "text", "bubble", "ink"],
+          "description": "body, outline, eye e blush são opcionais (sem eles valem ink e star)"
+        },
+        "size": {
+          "type": "array",
+          "description": "[w, h] de um quadro, em pixels do PNG",
+          "prefixItems": [{ "type": "integer", "minimum": 8, "maximum": 96 }, { "type": "integer", "minimum": 8, "maximum": 96 }],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "origin": {
+          "type": "array",
+          "description": "[x, y] no quadro que fica no centro do Oba (entre 0 e w, entre 0 e h)",
+          "prefixItems": [{ "type": "number", "minimum": 0 }, { "type": "number", "minimum": 0 }],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "scale": { "type": "integer", "minimum": 1, "maximum": 8, "description": "Cada pixel do PNG vira scale × scale na tela (w × scale até 240, h × scale até 200)" },
+        "frames": {
+          "type": "object",
+          "description": "Folha de quadros de cada humor. Humor sem folha usa a do idle.",
+          "required": ["idle"],
+          "additionalProperties": false,
+          "properties": {
+            "idle": { "$ref": "#/$defs/frames" },
+            "scared": { "$ref": "#/$defs/frames" },
+            "shy": { "$ref": "#/$defs/frames" },
+            "happy": { "$ref": "#/$defs/frames" },
+            "dizzy": { "$ref": "#/$defs/frames" },
+            "sleepy": { "$ref": "#/$defs/frames" }
+          }
+        },
+        "shadow": { "$ref": "#/$defs/shadow" },
+        "anchors": { "$ref": "#/$defs/anchors" }
+      }
+    },
+
+    "frames": {
+      "type": "object",
+      "required": ["sheet"],
+      "additionalProperties": false,
+      "properties": {
+        "sheet": { "$ref": "#/$defs/path", "description": "PNG com os quadros lado a lado: altura h, largura N × w (N de 1 a 32), sem entrelaçamento, alpha só 0 ou 255" },
+        "fps": { "type": "integer", "minimum": 1, "maximum": 30, "description": "Quadros por segundo (padrão 6)" }
+      }
+    },
+
+    "motion": {
+      "description": "Número = constante; sin: sinf(t*vel)*amp + base; bounce: -|sinf(t*vel)|*amp + base; jitter: inteiro sorteado a cada quadro",
+      "oneOf": [
+        { "type": "number" },
+        {
+          "type": "object", "required": ["sin"], "additionalProperties": false,
+          "properties": { "sin": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 } }
+        },
+        {
+          "type": "object", "required": ["bounce"], "additionalProperties": false,
+          "properties": { "bounce": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 3 } }
+        },
+        {
+          "type": "object", "required": ["jitter"], "additionalProperties": false,
+          "properties": { "jitter": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 } }
+        }
+      ]
+    },
+
+    "mood": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bob": { "$ref": "#/$defs/motion", "description": "Sobe e desce (px)" },
+        "sway": { "$ref": "#/$defs/motion", "description": "Lado a lado (px)" },
+        "squash": { "$ref": "#/$defs/motion", "description": "Achata e estica (fração)" },
+        "wave": { "$ref": "#/$defs/motion", "description": "Amplitude do balanço da parte de baixo (px)" },
+        "face": {
+          "type": "object",
+          "description": "Nos sprites, eyes e cheeks não valem (o rosto está no desenho)",
+          "additionalProperties": false,
+          "properties": {
+            "eyes": { "enum": ["open", "closing", "happy", "scared", "spiral", "covered"] },
+            "cheeks": { "oneOf": [{ "type": "boolean" }, { "const": "touch" }], "description": "\"touch\": só enquanto seguram o dedo na tela" },
+            "extra": { "enum": ["none", "stars", "zzz"] },
+            "dy": { "type": "number", "description": "O rosto todo desce (ou sobe) esse tanto" }
+          }
+        },
+        "leds": {
+          "type": "object",
+          "required": ["fx"],
+          "additionalProperties": false,
+          "properties": {
+            "fx": { "enum": ["off", "solid", "breathe", "rainbow", "strobe", "chase"] },
+            "color": { "$ref": "#/$defs/color" },
+            "trail": { "$ref": "#/$defs/color", "description": "chase: os vizinhos do LED aceso" },
+            "min": { "type": "number", "minimum": 0, "maximum": 1 },
+            "max": { "type": "number", "minimum": 0, "maximum": 1 },
+            "speed": { "type": "number", "description": "breathe: rad/s; rainbow: matiz por ms" },
+            "ms": { "type": "integer", "minimum": 1, "description": "strobe e chase: tempo de cada passo" }
+          }
+        },
+        "ms": { "type": "integer", "minimum": 0, "description": "Quanto dura. No idle: tempo sem interação até ir para then (0 = nunca)" },
+        "quiet_ms": { "type": "integer", "minimum": 0, "description": "Só sai depois desse tempo sem barulho alto" },
+        "then": { "$ref": "#/$defs/mood_name" }
+      }
+    },
+
+    "reflex": {
+      "type": "object",
+      "required": ["on", "do"],
+      "additionalProperties": false,
+      "properties": {
+        "on": { "enum": ["touch.tap", "sound.loud", "sound.voice", "imu.shake", "imu.tap", "wake", "bubble.open"] },
+        "do": {
+          "description": "Um humor, ou glance (olha rápido para um lado), turn (vira para o lado do teco) e none",
+          "enum": ["idle", "scared", "shy", "happy", "dizzy", "sleepy", "glance", "turn", "none"]
+        },
+        "from": { "type": "array", "items": { "$ref": "#/$defs/mood_name" }, "description": "Só nestes humores" },
+        "except": { "type": "array", "items": { "$ref": "#/$defs/mood_name" }, "description": "Em todos menos estes" },
+        "sound": { "$ref": "#/$defs/sound_name", "description": "Nome de um som de sounds para tocar junto (só com o REC desligado)" }
+      },
+      "not": { "required": ["from", "except"] }
+    },
+
+    "agent": {
+      "type": "object",
+      "description": "O cérebro do Oba, que roda fora da placa (harness)",
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": { "type": "string", "pattern": "^[a-z0-9_-]{1,40}$", "description": "Nome de um agente no catálogo do harness (agents no config.json). default = o agente genérico" },
+        "persona": { "type": "string" },
+        "model": { "type": "string", "description": "De uma lista permitida do harness" },
+        "abilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "triggers": {
+          "type": "array",
+          "description": "Quais eventos acordam o agente e como",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "required": ["on"],
+            "additionalProperties": false,
+            "properties": {
+              "on": { "type": "string", "pattern": "^[a-z]+(\\.[a-z]+)?$", "description": "Evento da placa (touch.tap, button.a, wake…) ou do roteador (transcript.final, rec.on, rec.off, oba.changed, reply)" },
+              "batch": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Quantos eventos juntar antes de acordar o agente" },
+              "debounce_ms": { "type": "integer", "minimum": 0, "maximum": 10000, "description": "Espera esse silêncio antes de acordar" },
+              "cooldown_ms": { "type": "integer", "minimum": 0, "description": "Intervalo mínimo entre duas rodadas" },
+              "run": { "type": "string", "pattern": "^[a-z0-9_-]{1,32}$", "description": "O que pedir ao agente (padrão think)" }
+            }
+          }
+        },
+        "mcp": { "type": "array", "description": "Nomes do catálogo de MCPs do harness (não aceita URL solta)", "items": { "type": "string" }, "uniqueItems": true }
+      }
+    }
+  }
+}

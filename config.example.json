@@ -1,0 +1,22 @@
+{
+  "prefix": "obapocket",
+  "device": "oba-01",
+  "region": "us-east-1",
+  "transcribe": {
+    "region": "sa-east-1",
+    "language": "pt-BR",
+    "vocabulary": ["Amazon-Bedrock", "Bedrock", "AgentCore", "SageMaker", "DynamoDB", "Lambda", "Kinesis",
+                   "EventBridge", "CloudWatch", "CloudFront", "Fargate", "Aurora", "QuickSight", "Greengrass"]
+  },
+  "models": ["us.anthropic.claude-sonnet-5"],
+  "model_regions": ["us-east-1", "us-east-2", "us-west-2"],
+  "agents": {
+    "default": {"type": "agentcore"}
+  },
+  "mcp": {
+    "aws-knowledge": "https://knowledge-mcp.global.api.aws",
+    "demos": null
+  },
+  "url_hosts": ["aws.amazon.com", "docs.aws.amazon.com", "repost.aws", "github.com", "workshops.aws"],
+  "obas": ["obas", "obas.private"]
+}
