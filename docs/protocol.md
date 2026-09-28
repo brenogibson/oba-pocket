@@ -2,7 +2,8 @@
 
 Como a placa (o corpo do Oba) conversa com o harness (o cérebro, fora da placa).
 O transporte é MQTT. Na v1 ele roda no AWS IoT Core, com mTLS e o certificado da
-placa. Nada no protocolo depende da AWS: basta trocar o broker e o harness.
+placa. Nada no protocolo depende da AWS; o que o código de hoje teria que mudar para
+rodar sem ela está em [Rodar local](../README.md#rodar-local).
 
 ```
  placa ──state (retido)──▶                         ◀──cmd── harness

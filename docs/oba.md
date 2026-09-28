@@ -258,7 +258,7 @@ o Oba só tem os reflexos.
 
 | Campo | |
 |---|---|
-| `endpoint` | o nome de um agente no catálogo do harness (`agents` no `config.json`). `default` é o agente genérico |
+| `endpoint` | o nome de um agente no catálogo do harness (`agents` no `config.json`): um runtime do AgentCore (`{"type": "agentcore", "arn": "…"}`) ou uma URL que recebe o [contrato](protocol.md#contrato-roteador--agente) num POST (`{"type": "http", "url": "…"}`). `default` é o agente genérico |
 | `persona` | quem o Oba é, em texto livre. É o começo de todo prompt dele |
 | `model` | um modelo da lista permitida do harness. Sem o campo, vale o primeiro da lista |
 | `abilities` | habilidades prontas do agente genérico (abaixo) |

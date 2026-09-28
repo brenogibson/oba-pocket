@@ -32,19 +32,49 @@ biblioteca de Obas. Sem cartão, a placa usa o Oba embutido, o Nimbo (`obas/nimb
 
 ## Arquitetura
 
-```
- placa ──áudio (só com REC)──▶ Amazon Transcribe
-   │ ▲
-   │ └── cmd ◀── roteador (Lambda) ◀──▶ agente (AgentCore)
-   │                ▲
-   │                └────────────────────────────────────────────────┐
-   └── state, evt, transcript, reply ──▶ AWS IoT Core ──▶ IoT Rule ──┘
-                                                 └──▶ display/ (tela separada, só leitura)
+```mermaid
+flowchart LR
+  subgraph rede["WiFi da placa, gravado no firmware"]
+    placa["Placa (Core2)<br/>certificado X.509 próprio"]
+  end
+  subgraph pc["Qualquer computador"]
+    tela["Navegador<br/>display/"]
+    cli["CLI<br/>tools/oba.py"]
+  end
+  subgraph aws["Sua conta da AWS"]
+    cred["IoT credentials provider"]
+    transcribe["Amazon Transcribe<br/>região perto da placa"]
+    iot["AWS IoT Core"]
+    router["Roteador<br/>Lambda"]
+    agent["Agente<br/>AgentCore Runtime"]
+    bedrock["Amazon Bedrock"]
+    ddb[("DynamoDB<br/>sessão e memória")]
+    s3[("S3<br/>registro de Obas")]
+    cognito["Cognito<br/>sem login"]
+  end
+  subgraph ext["Internet"]
+    mcp["MCPs do catálogo"]
+  end
+  placa <-->|"certificado → credenciais temporárias"| cred
+  placa <-->|"áudio e legendas, só com REC"| transcribe
+  placa <-->|"MQTT com mTLS"| iot
+  iot -->|"IoT Rule"| router
+  router -->|"cmd, ui/*"| iot
+  router -->|"contrato JSON"| agent
+  agent --> bedrock
+  agent --> mcp
+  router --- ddb
+  router --- s3
+  tela <-->|"credenciais só de leitura"| cognito
+  tela -->|"assina os tópicos da placa"| iot
+  cli <-->|"cmd e reply, perfil da AWS CLI"| iot
+  cli -->|"sobe os Obas"| s3
 ```
 
 - **Placa** (`src/`): mantém o Oba ativo na PSRAM, desenha a 30 quadros por segundo,
   roda os reflexos e publica eventos de alto nível (`touch.tap`, `imu.shake`, `wake`,
-  legendas). Nunca manda o fluxo cru dos sensores.
+  legendas). Nunca publica o fluxo cru dos sensores no MQTT; o áudio, só com o REC,
+  vai direto para o Transcribe.
 - **Roteador** (`harness/router/`): aplica os gatilhos do Oba ativo (lote, debounce,
   cooldown), guarda a sessão no DynamoDB, busca o `oba.json` no registro S3 e publica
   as ações do agente.
@@ -54,9 +84,86 @@ biblioteca de Obas. Sem cartão, a placa usa o Oba embutido, o Nimbo (`obas/nimb
   siga o [contrato](docs/protocol.md#contrato-roteador--agente) pode ser o cérebro de um Oba.
 - **Tela separada** (`display/`): uma página que mostra as legendas, as cartas e o
   resumo. Só lê os tópicos da placa.
+- **CLI** (`tools/oba.py`): instala, ativa e remove Obas pela nuvem, com o perfil da
+  AWS CLI, e sobe os Obas para o registro.
 
-Nada no protocolo depende da AWS: o MQTT fica isolado em `src/cloud.cpp` e o harness
-segue um contrato simples.
+Quase tudo fica na `region` do `config.json`. O Transcribe fica em `transcribe.region`,
+perto da placa. O Bedrock usa um perfil de inferência, que distribui as chamadas entre as
+regiões dele; as `model_regions` têm que cobrir essas regiões, porque são elas que a
+policy do agente libera.
+
+### Por que na nuvem
+
+O Oba Pocket foi feito para andar com você. Onde a placa tiver internet, ela fala
+direto com a AWS e o Oba funciona sem nenhum servidor seu ligado. A tela separada é só
+uma página estática, aberta num navegador.
+
+- **Cada placa tem a sua identidade.** O `setup.py` gera a chave e um CSR na sua
+  máquina, e o IoT Core emite o certificado. A chave fica no `src/secrets.h` (fora do
+  git) e na placa, e nunca vai para a AWS. Com o certificado, a placa abre o MQTT (mTLS)
+  e troca o mesmo certificado por credenciais temporárias que só servem para o
+  Transcribe. A policy só deixa a placa publicar nos tópicos dela, em
+  `<prefixo>/<placa>/`, e só receber o `cmd`.
+- **O áudio não passa pelo harness.** Ele vai da placa para o Transcribe, e o texto
+  volta para a placa. Do tópico `transcript`, só as frases finais seguem pela IoT Rule
+  até o roteador. Os eventos `wake` e `rule.fired` levam junto a frase em que o nome ou
+  a palavra apareceu, às vezes ainda parcial.
+- **O estado não fica na Lambda.** A sessão, as regras armadas e a memória ficam no
+  DynamoDB, e os Obas no S3. A Lambda só guarda um cache curto do `oba.json`.
+- **O cérebro é trocável.** O Oba escolhe o agente pelo nome, no catálogo `agents` do
+  `config.json`. Pode ser outro runtime do AgentCore (`{"type": "agentcore", "arn": "…"}`),
+  que roda agentes de qualquer framework (Strands, LangGraph, LangChain…) desde que
+  sigam o [contrato](docs/protocol.md#contrato-roteador--agente), ou uma URL
+  (`{"type": "http", "url": "…"}`) que recebe o mesmo JSON num POST. O `setup.py` só
+  libera para o roteador os runtimes do catálogo. A URL precisa ser pública, porque a
+  Lambda não enxerga a sua rede, e o roteador ainda não manda nenhuma autenticação. Os
+  MCPs do catálogo são serviços de fora da conta, que o agente chama pela internet.
+
+A placa conhece uma rede WiFi só, a do `src/secrets.h`, e trocar de rede exige gravar
+de novo. Ela não passa por portal cativo nem por WPA2-Enterprise, e a rede tem que
+liberar a saída para as portas 8883 (MQTT), 8443 (Transcribe) e 443, e para o NTP. Fora
+de casa, o hotspot do celular resolve.
+
+| | Na nuvem (como está) | Local |
+|---|---|---|
+| Onde funciona | onde a placa tiver internet, pela rede gravada nela (ou um hotspot) | só na rede do harness, ou por VPN |
+| O que fica ligado | nenhum servidor seu; a tela é uma página aberta num navegador | uma máquina com o broker, o roteador e o agente |
+| Segurança | mTLS por placa, policy por tópico, credenciais temporárias. A tela usa Cognito sem login: quem tiver o `display/config.js` lê as legendas e os resumos da placa, então não publique a página sem autenticação | você configura: TLS e usuários no broker |
+| Custo | pago pelo uso, sem mensalidade: minutos do Transcribe, tokens do Bedrock, AgentCore, Lambda, IoT Core, DynamoDB, S3 e CloudWatch Logs (o armazenamento no S3 e nos logs cobra mesmo parado) | a máquina; nada de nuvem se a fala e o modelo também forem locais |
+| Agente na sua rede | só por uma URL pública (um túnel, por exemplo) | direto |
+| Áudio e legendas | passam pela sua conta da AWS | ficam na sua rede, se a fala e o modelo também forem locais |
+
+### Rodar local
+
+O protocolo não depende da AWS e, no firmware, toda a rede (MQTT, credenciais e o
+stream do Transcribe) fica em `src/cloud.cpp`. O harness, a tela e a CLI usam serviços
+da AWS. Para rodar tudo numa rede local, teria que mudar:
+
+- **Broker:** um broker MQTT (o Mosquitto, por exemplo) no lugar do IoT Core. O
+  `src/cloud.cpp` passaria a ler o host, a porta e as credenciais (usuário e senha, ou
+  certificados TLS) da configuração, em vez do endpoint do IoT Core.
+- **Fala:** dá para manter o Transcribe, porque o credentials provider é uma chamada
+  HTTPS à parte, com o mesmo certificado, e não depende da conexão MQTT; o thing, a
+  policy e o role alias do `setup.py` continuam. Sem AWS nenhuma, o stream do
+  `src/cloud.cpp` (`startStream`, `pumpAudio`, `onWsEvent`, `handleTranscript`) teria
+  que mandar o áudio para um reconhecedor de fala local (um Whisper, por exemplo), e a
+  placa continuaria publicando as frases em `transcript`.
+- **Roteador:** um processo com `paho-mqtt` no lugar da IoT Rule e da Lambda. Ele
+  assinaria `<prefixo>/+/+`, faria o que a regra faz (acrescentar `dev` e `ch`, o 2º e o
+  3º nível do tópico, ao JSON) e chamaria o `handler` do `harness/router/router.py` numa
+  thread por mensagem, com um `context` que tenha `get_remaining_time_in_millis()`,
+  porque o handler espera o debounce e o agente. O roteador publica pelo `iot-data`,
+  guarda a sessão no DynamoDB e lê o registro do S3: isso vira o broker, um SQLite e
+  uma pasta.
+- **Agente:** o `harness/agent/main.py` já roda fora do AgentCore. `python main.py`
+  serve `/invocations` em `127.0.0.1:8080`, a mesma porta da tela do "Subindo"; para
+  mudar a porta ou aceitar outras máquinas, `app.run(port=8081, host="0.0.0.0")`. No
+  catálogo, ele entra como `{"type": "http", "url": "http://localhost:8081/invocations"}`.
+  Sem AWS, o modelo sai do Bedrock para outro provedor do Strands (um modelo local, por
+  exemplo).
+- **Tela separada e CLI:** o `display/` passaria a conectar no WebSocket do broker, sem
+  Cognito, e o `tools/oba.py` publicaria pelo broker e gravaria os Obas na pasta do
+  registro, em vez de usar o IoT Core e o S3.
 
 ## Precisa de
 
