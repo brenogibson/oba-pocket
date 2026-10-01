@@ -49,8 +49,17 @@ bool cloudTakeStateRequest();
 // Publica uma mensagem do protocolo que o loop montou. Nos eventos, evt é o type,
 // para as regras armadas; publish = false só passa pelas regras (o Oba não pediu
 // esse evento ao harness).
-enum class Channel : uint8_t { Evt, Reply, State };
+enum class Channel : uint8_t { Evt, Reply, State, Ext };
 void cloudSend(Channel ch, const String& json, const char* evt = nullptr, bool publish = true);
+
+// Fontes externas (docs/protocol.md, "Fontes externas"): o que chegou em
+// ext/<fonte>, para o loop (ext.cpp), e a resposta em ext/<fonte>/re. Quem
+// recebe a mensagem libera com delete.
+struct ExtMessage {
+  String src, json;
+};
+ExtMessage* cloudTakeExt();
+void cloudSendExt(const String& src, const String& json);
 
 // Hora de verdade (NTP) em ms, ou 0 enquanto não sincronizou
 uint64_t cloudEpochMs();

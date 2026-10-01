@@ -33,6 +33,7 @@ OUTLINE_MAX = 256             # OBA_OUTLINE_MAX em src/oba.h
 SPRITES_MAX = 1024 * 1024     # OBA_SPRITES_MAX: folhas decodificadas (RGB565 + máscara)
 SOUNDS_MAX = 512 * 1024       # OBA_SOUNDS_MAX: PCM de todos os sons
 SOUND_MAX_MS = 10000          # OBA_SOUND_MAX_MS
+VIBRATE_MS_MAX = 2000         # VIBRATION_MS_MAX em src/vibration.h (os passos somados)
 FRAMES_MAX = 32               # quadros por folha
 SPRITE_W_MAX, SPRITE_H_MAX = 240, 200   # tamanho do quadro na tela (size × scale)
 FILES_MAX = 64                # INSTALL_FILES_MAX em src/install.h, contando o oba.json
@@ -56,22 +57,32 @@ def dump(oba):
     return fmt(oba, 0) + "\n"
 
 
+def _no_constant(name):
+    raise ValueError(f"{name} não é número em JSON (a placa não lê)")
+
+
+def loads(text):
+    """json.loads que recusa NaN, Infinity e -Infinity (o Python aceita; o ArduinoJson e o navegador não)."""
+    return json.loads(text, parse_constant=_no_constant)
+
+
 def load(target):
     p = Path(target)
     folder = p if p.is_dir() else p.parent
     path = p / "oba.json" if p.is_dir() else p
-    return folder, path, json.loads(path.read_text())
+    return folder, path, loads(path.read_text())
 
 
 def valid_path(rel):
     """Caminho relativo aceito em files, sheet e sounds (o mesmo que a placa aceita)."""
     return (isinstance(rel, str) and PATH_CHARS.fullmatch(rel) is not None and ".." not in rel
             and "//" not in rel and rel[0] not in "/." and not rel.endswith("/")
+            and re.search(r"\.(/|$)", rel) is None      # o FAT tira o ponto do fim dos nomes
             and rel.count("/") <= PATH_DIRS_MAX)
 
 
 PATH_RULE = ("só A-Z a-z 0-9 . _ / -, até 64 caracteres e 4 pastas, sem .. nem //, sem / ou . no começo "
-             "e sem / no fim")
+             "e sem / no fim nem . antes de / ou no fim")
 
 
 # ---------------------------------------------------------------- PNG
@@ -111,9 +122,20 @@ def _unfilter(raw, h, stride, bpp):
         prev = row
 
 
+PNG_SIG = b"\x89PNG\r\n\x1a\n"
+PNG_PIXELS_MAX = SPRITES_MAX // 3   # nenhuma folha maior que isso cabe na placa
+
+
+def png_size(data):
+    """(largura, altura) do IHDR, sem descompactar nada; (None, None) se não der para ler."""
+    if len(data) < 24 or data[:8] != PNG_SIG or data[12:16] != b"IHDR":
+        return None, None
+    return struct.unpack(">II", data[16:24])
+
+
 def png_check(data):
     """(largura, altura, problema ou None). Recusa entrelaçado e alpha que não seja 0 ou 255."""
-    if data[:8] != b"\x89PNG\r\n\x1a\n":
+    if data[:8] != PNG_SIG:
         return None, None, "não é PNG"
     pos, ihdr, trns, idat = 8, None, None, []
     try:
@@ -127,6 +149,8 @@ def png_check(data):
             if zlib.crc32(kind + body) != struct.unpack(">I", data[pos + 8 + n:pos + 12 + n])[0]:
                 raise PngError(f"PNG corrompido (CRC do {kind.decode('latin-1')})")
             pos += 12 + n
+            if not ihdr and kind != b"IHDR":
+                raise PngError("PNG sem IHDR no começo")
             if kind == b"IHDR":
                 ihdr = struct.unpack(">IIBBBBB", body[:13])
             elif kind == b"tRNS":
@@ -147,12 +171,16 @@ def png_check(data):
         return w, h, f"PNG com cabeçalho inválido (tipo de cor {ctype}, {depth} bits)"
     if interlace:
         return w, h, "PNG entrelaçado (Adam7); salve sem entrelaçamento"
+    if w * h > PNG_PIXELS_MAX:
+        return w, h, f"PNG de {w} × {h} px; decodificado passa de {SPRITES_MAX} bytes (1 MB)"
     stride = (w * channels * depth + 7) // 8
+    need = h * (stride + 1)
     try:
-        raw = zlib.decompress(b"".join(idat))
+        # Só o que a imagem usa: um IDAT pequeno pode inflar para gigabytes
+        raw = zlib.decompressobj().decompress(b"".join(idat), need)
     except zlib.error:
         return w, h, "PNG com dados corrompidos"
-    if len(raw) < h * (stride + 1):
+    if len(raw) < need:
         return w, h, "PNG com dados a menos"
 
     # Só a transparência importa: cor sem alpha (ou com tRNS de uma cor só) é sempre 0 ou 255
@@ -217,7 +245,9 @@ def wav_check(data):
 def _check_files(folder, oba, json_size, errs):
     """Confere files (caminho, existência, sha, limites). Devolve {caminho: bytes} dos que existem."""
     files = oba.get("files") if isinstance(oba.get("files"), dict) else {}
-    found, lower, total = {}, {}, json_size
+    found, lower, total = {}, {"oba.json": "oba.json"}, json_size
+    # Pastas de todos os caminhos, em minúsculas (o cartão não separa maiúsculas de minúsculas)
+    dirs = {rel.lower()[:i] for rel in files for i, c in enumerate(rel) if c == "/"}
     if len(files) + 1 > FILES_MAX:
         errs.append(f"files: {len(files)} arquivos; com o oba.json, o máximo é {FILES_MAX}")
     for rel, sha in files.items():
@@ -231,7 +261,7 @@ def _check_files(folder, oba, json_size, errs):
         if rel.lower() in lower:
             errs.append(f"{where}: o cartão (FAT) não diferencia de {lower[rel.lower()]}")
         lower[rel.lower()] = rel
-        if any(o.startswith(rel + "/") for o in files):
+        if rel.lower() in dirs:
             errs.append(f"{where}: é arquivo e pasta ao mesmo tempo")
         f = folder / rel
         if not f.is_file():
@@ -283,18 +313,22 @@ def _check_sprites(look, files, found, errs):
             continue
         if sheet not in found:
             continue  # já reclamado em files
-        pw, ph, problem = png_check(found[sheet])
+        # As medidas vêm do cabeçalho: folha que já não serve nem é descompactada
+        pw, ph = png_size(found[sheet])
         if pw and ph:
             mem[sheet] = pw * ph * 3
+            n = len(errs)
+            if ph != h:
+                errs.append(f"{where}: {sheet} tem {ph} px de altura; precisa ser {h} (look.size)")
+            if pw % w:
+                errs.append(f"{where}: {sheet} tem {pw} px de largura, que não é múltiplo de {w} (look.size)")
+            elif not 1 <= pw // w <= FRAMES_MAX:
+                errs.append(f"{where}: {sheet} tem {pw // w} quadros; o máximo é {FRAMES_MAX}")
+            if len(errs) > n or sum(mem.values()) > SPRITES_MAX:
+                continue  # o total passou: a mensagem sai no fim
+        problem = png_check(found[sheet])[2]
         if problem:
             errs.append(f"{where}: {sheet}: {problem}")
-            continue
-        if ph != h:
-            errs.append(f"{where}: {sheet} tem {ph} px de altura; precisa ser {h} (look.size)")
-        if pw % w:
-            errs.append(f"{where}: {sheet} tem {pw} px de largura, que não é múltiplo de {w} (look.size)")
-        elif not 1 <= pw // w <= FRAMES_MAX:
-            errs.append(f"{where}: {sheet} tem {pw // w} quadros; o máximo é {FRAMES_MAX}")
     total = sum(mem.values())
     if total > SPRITES_MAX:
         errs.append(f"look.frames: as folhas ocupam {total} bytes decodificadas (largura × altura × 3); "
@@ -330,6 +364,13 @@ def _check_sounds(oba, files, found, errs):
     for i, r in enumerate(reflexes):
         if isinstance(r, dict) and isinstance(r.get("sound"), str) and r["sound"] not in sounds:
             errs.append(f"reflexes.{i}.sound: {r['sound']!r} não está em sounds")
+    buzz = [r["vibrate"] for r in reflexes if isinstance(r, dict) and isinstance(r.get("vibrate"), dict)]
+    if buzz and "vibration" not in requires:
+        errs.append("requires: um reflexo vibra, então precisa de \"vibration\"")
+    for i, r in enumerate(reflexes):
+        ms = r.get("vibrate", {}).get("ms") if isinstance(r, dict) and isinstance(r.get("vibrate"), dict) else None
+        if isinstance(ms, list) and all(isinstance(n, int) for n in ms) and sum(ms) > VIBRATE_MS_MAX:
+            errs.append(f"reflexes.{i}.vibrate.ms: soma {sum(ms)} ms; o máximo é {VIBRATE_MS_MAX}")
 
 
 def validate(target):
@@ -342,10 +383,14 @@ def validate(target):
         folder, path, oba = load(target)
     except (OSError, UnicodeDecodeError) as e:
         return [f"não deu para ler o oba.json: {e}"]
-    except json.JSONDecodeError as e:
+    except ValueError as e:     # JSONDecodeError e os NaN/Infinity do loads()
         return [f"oba.json não é JSON válido: {e}"]
     if not isinstance(oba, dict):
         return ["oba.json: precisa ser um objeto"]
+    try:
+        size = len(json.dumps(oba, separators=(",", ":"), ensure_ascii=False).encode())
+    except UnicodeEncodeError:
+        return ["oba.json: tem um \\uD800–\\uDFFF solto (meio par UTF-16), que não vira UTF-8"]
     errs = []
     schema = json.loads(SCHEMA.read_text())
     path_def = schema["$defs"]["path"]
@@ -364,7 +409,6 @@ def validate(target):
             msg = msg[:237] + "..."
         errs.append(f"{where}: {msg}")
     raw = path.stat().st_size
-    size = len(json.dumps(oba, separators=(",", ":"), ensure_ascii=False).encode())
     if max(raw, size) > JSON_MAX:
         errs.append(f"oba.json tem {raw} bytes ({size} minificado); o máximo é {JSON_MAX}")
     if path.name == "oba.json" and oba.get("id") and folder.name != oba["id"]:

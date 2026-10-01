@@ -67,6 +67,7 @@ CARD_TEXT_MAX = 600
 CMD_MAX = 14_000         # o buffer MQTT da placa é de 16 KB
 UI_MAX = 64_000
 SHEET_MAX = 48 * 1024    # folha idle que vai em base64 no ui/oba
+UI_OBA_FORMAT = 2        # mudou o que vai no ui/oba: sai de novo para todas as placas
 
 # O que o agente pode pedir (docs/protocol.md). reset e oba.* ficam com o roteador e a placa.
 AGENT_TYPES = {"speak", "arm", "disarm", "react", "look", "vibrate", "leds", "play", "read", "rec", "state", "ui"}
@@ -761,6 +762,7 @@ def publish_oba(dev: str, active: dict, spec: dict | None):
     else:
         data.update({k: look[k] for k in ("palette", "outline", "eyes") if k in look})
     data["wake_words"] = spec.get("wake_words", [])
+    data["sounds"] = sorted(spec.get("sounds") or {})  # o portal oferece tocar
     ui(dev, "oba", data, retain=True)
 
 
@@ -778,7 +780,7 @@ def on_state(dev: str, msg: dict, ctx):
     # Com sha256, o ui/oba sai de novo quando o Oba muda sem mudar a versão; sem bater com o
     # registro (p.ex. a placa terminou de instalar antes da CLI subir o Oba), sai de novo no
     # próximo state
-    tag = f"{oba}@{active.get('version')}"
+    tag = f"{UI_OBA_FORMAT}:{oba}@{active.get('version')}"
     if isinstance(active.get("sha256"), str):
         tag += f"#{active['sha256'][:12]}" + ("" if same else "?")
     old = table.update_item(

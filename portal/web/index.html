@@ -1,0 +1,105 @@
+<!doctype html>
+<!--
+  Portal do Oba Pocket: a reunião ao vivo, a placa e os Obas, no celular ou no computador.
+  Login no Cognito; o CloudFront serve esta página de um bucket privado e a API de uma
+  Lambda que só ele alcança. O config.js é gerado pelo setup.py e vai direto para o bucket.
+-->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Oba Pocket</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1a22">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" id="favicon" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+<script src="vendor/mqtt.min.js"></script>
+<script src="vendor/qrcode.js"></script>
+<script type="module" src="app.js"></script>
+</head>
+<body>
+
+<div id="login" hidden>
+  <img src="icon-192.png" alt="" width="96" height="96">
+  <h1>Oba Pocket</h1>
+  <p id="loginMsg">Entre para acompanhar a placa, as reuniões e os Obas.</p>
+  <button id="loginBtn" class="primary" type="button">Entrar</button>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <div id="avatar"></div>
+    <h1 id="title">Oba Pocket</h1>
+    <span id="status" class="off"><i></i><span id="statusText">conectando…</span></span>
+  </header>
+
+  <main>
+    <section id="tab-meeting" class="tab">
+      <div id="meetingBar">
+        <span id="counter"></span>
+        <div id="thinking"><i></i><i></i><i></i><span id="thinkingText"></span></div>
+        <button id="lastSummary" type="button" hidden>Último resumo</button>
+      </div>
+      <section id="transcript"><p class="empty">Aguardando a placa…</p></section>
+      <aside id="cards">
+        <section id="hand"><h3>Armado na placa</h3><div id="handList"><p class="empty">Nada armado ainda</p></div></section>
+      </aside>
+    </section>
+
+    <section id="tab-device" class="tab" hidden>
+      <section class="panel"><h3>Placa</h3><div id="deviceInfo"></div></section>
+      <section class="panel"><h3>Obas na placa</h3><ul id="deviceObas" class="list"></ul></section>
+      <section class="panel"><h3>Conta</h3>
+        <p class="muted">Entrou como <b id="who"></b>.</p>
+        <button id="logoutBtn" type="button">Sair</button>
+      </section>
+    </section>
+
+    <section id="tab-obas" class="tab" hidden>
+      <div class="bar"><span id="obasNote" class="muted"></span><button id="obasReload" type="button">Atualizar</button></div>
+      <div id="obasList"></div>
+      <p class="hint">O setup.py sobe de novo os Obas das pastas do config.json: um Oba com o mesmo id
+        enviado por aqui volta a ser o do repositório.</p>
+    </section>
+
+    <section id="tab-upload" class="tab" hidden>
+      <section class="panel"><h3>Enviar um Oba</h3>
+        <p class="muted">Um zip com a pasta do Oba (o oba.json e os arquivos que ele lista em "files"),
+          até 4 MB. O portal confere tudo como o <code>tools/oba.py validate</code> e põe no registro.</p>
+        <input id="zipInput" type="file" accept=".zip,application/zip" hidden>
+        <div class="actions"><button id="zipBtn" type="button" class="primary">Escolher o zip</button></div>
+        <div id="uploadOut"></div>
+      </section>
+    </section>
+  </main>
+
+  <nav>
+    <a href="#reuniao">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      Reunião</a>
+    <a href="#placa">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 21h6M12 17v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      Placa</a>
+    <a href="#obas">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V11a7 7 0 0 1 14 0v9l-2.3-1.6L14.3 20 12 18.4 9.7 20l-2.4-1.6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="9.5" cy="11" r="1.3" fill="currentColor"/><circle cx="14.5" cy="11" r="1.3" fill="currentColor"/></svg>
+      Obas</a>
+    <a href="#enviar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5M5 15v4h14v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Enviar</a>
+  </nav>
+</div>
+
+<div id="summary"><article></article></div>
+<dialog id="confirm">
+  <form method="dialog">
+    <h3></h3><p></p>
+    <menu><button value="cancel">Cancelar</button><button value="ok" class="primary">Confirmar</button></menu>
+  </form>
+</dialog>
+<div id="toast" role="status"></div>
+</body>
+</html>

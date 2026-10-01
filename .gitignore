@@ -4,10 +4,10 @@ __pycache__/
 obas.private/
 src/aws_config.h
 config.json
-display/config.js
 harness/router/icons/
 build/
 src/secrets.h.bak
 .venv/
 .DS_Store
 shots/
+imported-img/

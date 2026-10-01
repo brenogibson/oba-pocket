@@ -1,0 +1,19 @@
+{
+  "name": "oba-pocket",
+  "description": "Plugins do Oba Pocket para o Claude Code.",
+  "owner": {
+    "name": "Oba Pocket"
+  },
+  "plugins": [
+    {
+      "name": "oba-ponte",
+      "description": "Mostra no Oba (M5Stack Core2) se o Claude Code está trabalhando ou esperando você, e deixa aprovar ou negar os pedidos de permissão tocando na placa.",
+      "version": "1.0.1",
+      "source": "./plugin",
+      "author": {
+        "name": "Oba Pocket"
+      },
+      "category": "productivity"
+    }
+  ]
+}

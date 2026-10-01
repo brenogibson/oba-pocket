@@ -25,6 +25,9 @@ extern Pet pet;
 // Começa de novo, feliz ("oi!"): ao ligar e ao trocar de Oba
 void petBegin(uint32_t now);
 void petEnterMood(Mood m, uint32_t now);
+// Humor de descanso, o que as fontes externas pedem (ext.cpp): Idle, Busy ou
+// Alert. Os humores passageiros voltam para ele em vez do idle.
+void petSetRest(Mood m, uint32_t now);
 
 // Microfone e IMU; disparam os reflexos de som e movimento
 void petSense(uint32_t now);

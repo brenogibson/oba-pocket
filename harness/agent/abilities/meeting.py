@@ -2,7 +2,7 @@
 
   think    as frases novas viram cartas: um balão agora (speak) ou uma "carta na
            manga" (arm), que dispara quando alguém volta ao assunto
-  summary  no fim da gravação, o resumo vai para a tela separada (ui/summary)
+  summary  no fim da gravação, o resumo vai para o portal (ui/summary)
 """
 
 from typing import Literal

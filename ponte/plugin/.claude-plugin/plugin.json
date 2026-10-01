@@ -1,0 +1,16 @@
+{
+  "name": "oba-ponte",
+  "version": "1.0.1",
+  "description": "Mostra no Oba (M5Stack Core2) se o Claude Code está trabalhando ou esperando você, e deixa aprovar ou negar os pedidos de permissão tocando na placa.",
+  "author": {
+    "name": "Oba Pocket"
+  },
+  "license": "MIT",
+  "keywords": [
+    "oba",
+    "m5stack",
+    "mqtt",
+    "aws-iot",
+    "permissions"
+  ]
+}

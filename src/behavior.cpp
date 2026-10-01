@@ -3,6 +3,7 @@
 #include "audio.h"
 #include "screen.h"
 #include "sound.h"
+#include "vibration.h"
 
 // Microfone (blocos de ~32 ms, ver audio.h). O limiar se adapta ao ruído
 // ambiente (baseline); os fatores dizem quantas vezes acima do ambiente conta
@@ -57,6 +58,9 @@ static bool moodFromLoud = false;
 
 static PetListener listener = nullptr;
 
+// Para onde os humores passageiros voltam (petSetRest)
+static Mood restMood = Mood::Idle;
+
 static void emit(Event e, uint32_t now, float dir = 0) {
   if (listener) listener(e, dir, now);
 }
@@ -71,6 +75,14 @@ void petEnterMood(Mood m, uint32_t now) {
   pet.mood = m;
   pet.moodStart = now;
   moodFromLoud = false;
+}
+
+void petSetRest(Mood m, uint32_t now) {
+  if (m == restMood) return;
+  restMood = m;
+  pet.lastActivity = now;  // mudou o que está acontecendo: acorda
+  // Um passageiro (happy, scared...) termina sozinho e cai no descanso novo
+  if (pet.mood == Mood::Idle || pet.mood == Mood::Sleepy || moodExternal(pet.mood)) petEnterMood(m, now);
 }
 
 void petBegin(uint32_t now) {
@@ -110,6 +122,7 @@ static void apply(const Reflex& r, Event e, uint32_t now, float dir) {
     String err;
     soundPlay(r.sound.c_str(), REFLEX_VOLUME, err);  // com o REC ligado não toca, e tudo bem
   }
+  if (r.vibrate.steps) vibrationStart(r.vibrate, now);
   switch (r.act) {
     case Reflex::ToMood: {
       Mood before = pet.mood;
@@ -136,6 +149,7 @@ bool petReact(Event e, uint32_t now, float dir) {
 bool petAct(const char* what, uint32_t now) {
   Mood m;
   if (moodByName(what, &m)) {
+    if (moodExternal(m)) return false;
     if (m != Mood::Sleepy) pet.lastActivity = now;  // o sonolento acorda com atividade
     petEnterMood(m, now);
   } else if (!strcmp(what, "glance")) {
@@ -176,6 +190,7 @@ void petTurnTo(float dir, uint32_t now) {
 
 static void handleSound(uint32_t now) {
   if (!audioTakeLevel(&micRms)) return;
+  if (vibrationActive(now)) return;  // o zumbido do próprio motor não é barulho
 
   float voiceTh = fmaxf(micBase * VOICE_FACTOR, VOICE_MIN);
   float loudTh  = fmaxf(micBase * LOUD_FACTOR, LOUD_MIN);
@@ -212,9 +227,12 @@ static void handleImu(uint32_t now) {
   // Teco: a média rápida acompanha a inclinação, então só o tranco sobra.
   // O primeiro pico aponta pro lado do empurrão; o de volta cai no cooldown.
   float hp = ax - axFast;
-  axFast += hp * 0.25f;
   tapPeak = fmaxf(tapPeak, fabsf(hp));
-  if (fabsf(hp) > TAP_G && now - lastTap > TAP_COOLDOWN_MS) {
+  // O tremor do próprio motor não é teco nem chacoalhão, nem fica nas médias
+  // para virar um depois que a vibração acaba
+  bool buzzing = vibrationActive(now);
+  axFast = buzzing ? ax : axFast + hp * 0.25f;
+  if (fabsf(hp) > TAP_G && now - lastTap > TAP_COOLDOWN_MS && !buzzing) {
     lastTap = now;
     float dir = (hp > 0 ? 1.f : -1.f) * TAP_SIGN * IMU_FLIP;
     Serial.printf("[imu] teco para a %s (%.2f g)\n", dir > 0 ? "direita" : "esquerda", fabsf(hp));
@@ -241,8 +259,8 @@ static void handleImu(uint32_t now) {
   float kBias = g < 40.f ? 0.02f : 0.001f;
   biasGx += dx * kBias; biasGy += dy * kBias; biasGz += dz * kBias;
 
-  gyroEnergy = gyroEnergy * 0.8f + g * 0.2f;
-  if (gyroEnergy > SHAKE_DPS) {
+  gyroEnergy = gyroEnergy * 0.8f + (buzzing ? 0.f : g * 0.2f);
+  if (gyroEnergy > SHAKE_DPS && !buzzing) {
     pet.lastActivity = now;
     petReact(Event::ImuShake, now);
   }
@@ -275,13 +293,21 @@ static void updateMood(uint32_t now) {
   uint32_t age = now - pet.moodStart;
   switch (pet.mood) {
     case Mood::Idle:
-      if (m.ms && now - pet.lastActivity > m.ms) petEnterMood(m.then, now);
+      if (restMood != Mood::Idle) petEnterMood(restMood, now);
+      else if (m.ms && now - pet.lastActivity > m.ms) petEnterMood(m.then, now);
       break;
     case Mood::Sleepy:
-      if (now - pet.lastActivity < 200) petEnterMood(m.then, now);  // acordou com toque/voz
+      if (restMood != Mood::Idle) petEnterMood(restMood, now);
+      else if (now - pet.lastActivity < 200) petEnterMood(m.then, now);  // acordou com toque/voz
+      break;
+    case Mood::Busy:
+    case Mood::Alert:
+      if (pet.mood != restMood) petEnterMood(restMood, now);
       break;
     default:
-      if (m.ms && age > m.ms && (!m.quietMs || now - pet.lastLoud > m.quietMs)) petEnterMood(m.then, now);
+      if (m.ms && age > m.ms && (!m.quietMs || now - pet.lastLoud > m.quietMs)) {
+        petEnterMood(m.then == Mood::Idle ? restMood : m.then, now);
+      }
       break;
   }
 }

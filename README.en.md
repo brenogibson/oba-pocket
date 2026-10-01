@@ -18,16 +18,19 @@ The code comments, the docs in `docs/` and the device UI are in Brazilian Portug
 ## What it does
 
 - **Reacts instantly, no cloud needed:** touches, shakes, taps and loud noises turn
-  into moods, sounds and LEDs, following the Oba's reflex table.
+  into moods, sounds, LEDs and vibration, following the Oba's reflex table.
 - **Follows a meeting:** with REC on, audio goes straight from the device to Amazon
   Transcribe. The agent reads the captions and answers with a bubble right away or with
   an "ace up its sleeve": a rule that fires on the device when someone brings the topic
-  back up. When REC turns off, the summary shows up on the separate display.
+  back up. When REC turns off, the summary shows up on the portal.
 - **Answers to its name:** with REC on, saying the Oba's name makes it react right
   away and publishes a `wake` event. The agent only wakes up on it if the Oba has
   `{"on": "wake"}` in `agent.triggers`.
-- **Swaps Obas over the air:** `tools/oba.py install` sends an Oba over MQTT; the device
-  checks each file's sha256 and asks on screen before installing.
+- **Swaps Obas over the air:** the portal (or `tools/oba.py install`) sends an Oba over
+  MQTT; the device checks each file's sha256 and asks on screen before installing.
+- **Portal on your phone:** a site with a login shows the captions, the cards and the
+  summary, the device's state and the Obas in the registry, with a preview. It also
+  takes a new Oba as a zip. No computer needed.
 - **Two kinds of body:** vector (rig), like Nimbo, or PNG pixel art with WAV sounds,
   like Bit (`obas/bit`).
 
@@ -40,9 +43,9 @@ flowchart LR
   subgraph net["The device's WiFi, flashed in the firmware"]
     placa["Device (Core2)<br/>its own X.509 certificate"]
   end
-  subgraph pc["Any computer"]
-    tela["Browser<br/>display/"]
-    cli["CLI<br/>tools/oba.py"]
+  subgraph pc["Phone or computer"]
+    nav["Portal in the browser<br/>portal/web/"]
+    cli["CLI, optional<br/>tools/oba.py"]
   end
   subgraph aws["Your AWS account"]
     cred["IoT credentials provider"]
@@ -53,7 +56,11 @@ flowchart LR
     bedrock["Amazon Bedrock"]
     ddb[("DynamoDB<br/>session and memory")]
     s3[("S3<br/>Oba registry")]
-    cognito["Cognito<br/>guest access"]
+    cf["CloudFront<br/>the only public entry point"]
+    site[("Private S3<br/>the site")]
+    api["Portal API<br/>Lambda, CloudFront only"]
+    inst["Installer<br/>Lambda"]
+    cognito["Cognito<br/>login and read-only credentials"]
   end
   subgraph ext["Internet"]
     mcp["MCP servers from the catalog"]
@@ -68,8 +75,15 @@ flowchart LR
   agent --> mcp
   router --- ddb
   router --- s3
-  tela <-->|"read-only credentials"| cognito
-  tela -->|"subscribes to the device's topics"| iot
+  nav <-->|"username and password"| cognito
+  nav -->|"HTTPS"| cf
+  cf -->|"OAC"| site
+  cf -->|"/api/*, OAC"| api
+  nav -->|"only reads the device's topics"| iot
+  api -->|"the device screen's commands"| iot
+  api -->|"Obas as zip"| s3
+  api -->|"install"| inst
+  inst -->|"oba.install in chunks"| iot
   cli <-->|"cmd and reply, AWS CLI profile"| iot
   cli -->|"uploads Obas"| s3
 ```
@@ -85,10 +99,15 @@ flowchart LR
   Amazon Bedrock AgentCore, built from the `agent` block of the `oba.json` (persona,
   model, abilities, MCP servers from an allow list). Any agent that follows the
   [contract](docs/protocol.md#contrato-roteador--agente) can be an Oba's brain.
-- **Separate display** (`display/`): a web page with the captions, the cards and the
-  summary. It can only read the device's topics.
-- **CLI** (`tools/oba.py`): installs, activates and removes Obas through the cloud, with
-  the AWS CLI profile, and uploads Obas to the registry.
+- **Portal** (`portal/`): a site on CloudFront, with a Cognito login, built for the
+  phone. The Meeting tab shows the captions, the cards and the summary. The Device tab
+  shows the state and sends the commands the device's screen offers: activate, remove,
+  play a sound and turn REC off. The Obas tab lists the registry with previews and
+  installs on the device, and the Upload tab takes a new Oba as a zip. The browser only
+  reads the device's topics; everything else goes through the API (`portal/api/`).
+  Details in [Portal](#portal).
+- **CLI** (`tools/oba.py`): does the same from the command line, with the AWS CLI
+  profile and without the portal's 4 MB limit.
 
 Almost everything lives in the `region` from `config.json`. Transcribe runs in
 `transcribe.region`, close to the device. Bedrock uses an inference profile, which
@@ -98,8 +117,8 @@ the list the agent's policy allows.
 ### Why the cloud
 
 Oba Pocket is meant to go with you. Wherever the device has internet, it talks straight
-to AWS and the Oba works without any server of yours running. The separate display is
-just a static page, opened in a browser.
+to AWS and the Oba works without any server of yours running. The portal is a static
+site on CloudFront, and its API is a Lambda that only runs when someone uses it.
 
 - **Each device has its own identity.** `setup.py` creates the key and a CSR on your
   machine, and IoT Core issues the certificate. The key lives in `src/secrets.h`
@@ -133,16 +152,46 @@ and 443, plus NTP. Away from home, a phone hotspot does the job.
 | | In the cloud (today) | Local |
 |---|---|---|
 | Where it works | wherever the device has internet, through the network flashed on it (or a hotspot) | only on the harness's network, or over a VPN |
-| What has to stay on | no server of yours; the display is a page opened in a browser | a machine with the broker, the router and the agent |
-| Security | mTLS per device, per-topic policy, temporary credentials. The display uses Cognito guest access: anyone with `display/config.js` can read the device's captions and summaries, so don't publish the page without authentication | up to you: TLS and users on the broker |
-| Cost | pay per use, no monthly fee: Transcribe minutes, Bedrock tokens, AgentCore, Lambda, IoT Core, DynamoDB, S3 and CloudWatch Logs (S3 and log storage bills even when idle) | the machine; no cloud bill if speech and the model are local too |
+| What has to stay on | no server of yours; the portal is a static site and Lambdas that only run when used | a machine with the broker, the router and the agent |
+| Security | mTLS per device, per-topic policy, temporary credentials. The portal requires a login, and only CloudFront answers the internet ([Portal](#portal)) | up to you: TLS and users on the broker |
+| Cost | pay per use, no monthly fee: Transcribe minutes, Bedrock tokens, AgentCore, Lambda, IoT Core, DynamoDB, S3, CloudFront and CloudWatch Logs (S3 and log storage bills even when idle) | the machine; no cloud bill if speech and the model are local too |
 | Agent on your network | only through a public URL (a tunnel, for example) | directly |
 | Audio and captions | go through your AWS account | stay on your network, if speech and the model are local too |
+
+### Portal
+
+From your account, only CloudFront answers the internet. AWS's own endpoints (the
+Cognito login and IoT Core, which the device already uses) are the usual ones.
+
+- **Login:** username and password in Cognito, on its own login page, in Portuguese.
+  Only the users in `portal.users` in `config.json` get in. Five wrong passwords in a
+  row lock the user out for a growing amount of time.
+- **Nothing is exposed:** the site's bucket is private, and the API is a Function URL
+  with IAM auth. Both only accept requests signed by the distribution (OAC). There's no
+  S3 website, API Gateway, load balancer or open security group.
+- **The API checks the Cognito token on every request.** It goes in `x-oba-token`,
+  because OAC takes over `Authorization`. The API only accepts the commands the device's
+  screen offers; turning REC on is still only possible from the device's button.
+- **The browser only reads.** The identity pool credentials last 1 h and renew by
+  themselves. They open MQTT over WebSocket and can only subscribe to
+  `<prefix>/<device>/*`. The API attaches the IoT policy on each login: with
+  `iot:AttachPolicy`, the browser could attach any policy to itself.
+- **Obas as zip:** up to 4 MB. The API checks the zip like `tools/oba.py validate` and
+  rejects symlinks, `..` and zip bombs before uploading to the registry. To install,
+  another Lambda (the installer) sends the Oba in chunks to the device, which asks for a
+  tap on "Instalar".
+- **Strict CSP:** no third-party scripts and no inline code; the libraries live in
+  `portal/web/vendor/`. The refresh token stays in the browser for 30 days, and "Sair"
+  (sign out) revokes it.
+
+To cut someone off, disable the user in Cognito (`admin-disable-user`) and do a global
+sign-out (`admin-user-global-sign-out`). The identity pool checks the token with Cognito
+and stops handing out credentials.
 
 ### Running it locally
 
 The protocol doesn't depend on AWS and, in the firmware, all the networking (MQTT,
-credentials and the Transcribe stream) is in `src/cloud.cpp`. The harness, the display
+credentials and the Transcribe stream) is in `src/cloud.cpp`. The harness, the portal
 and the CLI use AWS services. To run everything on a local network, this would have to
 change:
 
@@ -164,14 +213,14 @@ change:
   agent. The router publishes through `iot-data`, keeps the session in DynamoDB and
   reads the registry from S3: those become the broker, SQLite and a folder.
 - **Agent:** `harness/agent/main.py` already runs outside AgentCore. `python main.py`
-  serves `/invocations` on `127.0.0.1:8080`, the same port as the display in "Getting
-  started"; to change the port or accept other machines, use
-  `app.run(port=8081, host="0.0.0.0")`. In the catalog, it goes in as
-  `{"type": "http", "url": "http://localhost:8081/invocations"}`. With no AWS, the model
+  serves `/invocations` on `127.0.0.1:8080`; to change the port or accept other
+  machines, use `app.run(port=8081, host="0.0.0.0")`. In the catalog, it goes in as
+  `{"type": "http", "url": "http://localhost:8080/invocations"}`. With no AWS, the model
   moves from Bedrock to another Strands provider (a local model, for example).
-- **Separate display and CLI:** `display/` would connect to the broker's WebSocket,
-  without Cognito, and `tools/oba.py` would publish through the broker and write the
-  Obas to the registry folder, instead of using IoT Core and S3.
+- **Portal and CLI:** `portal/web/` would connect to the broker's WebSocket, and the
+  API (`portal/api/`) would become a process on the network, with another login instead
+  of Cognito. `tools/oba.py` would publish through the broker and write the Obas to the
+  registry folder, instead of using IoT Core and S3.
 
 ## Requirements
 
@@ -185,23 +234,33 @@ change:
 ## Getting started
 
 ```sh
-cp config.example.json config.json            # prefix, device, regions, language, models
+cp config.example.json config.json            # prefix, device, regions, models, portal users
 python3 -m venv .venv && . .venv/bin/activate
 pip install boto3 jsonschema paho-mqtt pyserial pillow
-python3 setup.py                              # AWS: device, harness and display, least privilege
+python3 setup.py                              # AWS: device, harness and portal, least privilege
 # fill in WIFI_SSID and WIFI_PASS in src/secrets.h (setup tells you if they're missing)
 
 pio run -e core2foraws -t upload              # firmware
-cd display && python3 -m http.server 8080     # separate display: http://localhost:8080
 ```
 
 `setup.py` uses the default AWS CLI profile (or `AWS_PROFILE`) and is safe to run again
 as many times as you like: it only changes what changed. It creates the thing and its
 certificate, the policies, the Transcribe role alias, the custom vocabulary, the S3
-registry, the table, the Lambda, the router's IoT Rule, the AgentCore runtime and the display's
-Cognito pool. It also writes `src/aws_config.h`, `display/config.js` and
-`src/secrets.h`. The device's private key is created on your machine and never goes to
-AWS.
+registry, the table, the Lambda, the router's IoT Rule, the AgentCore runtime and the
+portal (bucket, CloudFront, Cognito, the API and the installer), and at the end it prints
+the portal's address. It also writes `src/aws_config.h` and `src/secrets.h`. The device's
+private key is created on your machine and never goes to AWS.
+
+On the portal:
+
+- **Users:** add each one to `portal.users` (`{"username": "…", "email": "…"}`) and run
+  `python3 setup.py --portal`, which only touches the portal. A new user gets a
+  temporary password by email, valid for 3 days. On the first login, Cognito asks for a
+  new password: 12 characters or more, with upper and lower case, a number and a symbol.
+  If the temporary one expires, `python3 setup.py --resend <user>` sends another.
+- **Your own domain:** `portal.domain` with `portal.cert_arn` (an ACM certificate in
+  us-east-1). Without them, the address is the distribution's `*.cloudfront.net`.
+- **On the phone:** "Add to Home Screen" opens the portal like an app.
 
 On the device:
 
@@ -226,6 +285,12 @@ sounds, wake words, requested capabilities and the brain (`agent`). The format i
 Obas you don't want to publish can live in `obas.private/`: git ignores that folder,
 and `setup.py` uploads the Obas in it to the registry too.
 
+From the portal, zip the Oba's folder, with `oba.json` at the root of the zip or inside a
+single folder, and send it on the Upload tab. The portal checks the Oba, uploads it to
+the registry and offers to install it. Watch out: `setup.py` uploads the Obas from the
+`obas` folders in `config.json` again, so an Oba sent through the portal with the same
+id goes back to the repository's version.
+
 ## Protocol
 
 The [Oba Protocol v1](docs/protocol.md) uses six topics under `<prefix>/<device>/`:
@@ -244,7 +309,7 @@ minimal IAM policy for the CLI.
 | `harness/agent/` | generic agent (Strands) and its abilities (`abilities/`) |
 | `obas/` | public Obas: Nimbo and Bit |
 | `schema/` | `oba.json` format |
-| `display/` | separate display in the browser |
+| `portal/` | portal: the site (`web/`), the API and the installer (`api/`) |
 | `docs/` | protocol and Oba guide |
 | `tools/` | serial monitor, Oba validation and install, fonts and icons |
 
@@ -269,13 +334,16 @@ minimal IAM policy for the CLI.
 
 ## Secrets
 
-`src/secrets.h` (WiFi, the device's certificate and key), `src/aws_config.h`,
-`display/config.js` and `config.json` are generated or filled in by you and stay out
-of git. Nothing in the repo depends on a specific account.
+`src/secrets.h` (WiFi, the device's certificate and key), `src/aws_config.h` and
+`config.json` are generated or filled in by you and stay out of git. The portal's
+`config.js` isn't a secret, since it goes to the browser, but it carries your account's
+ids. That's why it's created in `build/portal/` (git-ignored) and goes straight to the
+bucket. Nothing in the repo depends on a specific account.
 
 ## License
 
 The code is under the [MIT license](LICENSE). The Nunito font (`tools/fonts/` and the
 generated font in `src/bubble_fonts.cpp`) is under the
-[SIL Open Font License 1.1](tools/fonts/Nunito-OFL.txt). The AWS icons aren't in the
-repo: `tools/fetch_icons.py` downloads the official package, which has its own terms.
+[SIL Open Font License 1.1](tools/fonts/Nunito-OFL.txt). MQTT.js and qrcode-generator,
+in `portal/web/vendor/`, are MIT (`portal/web/vendor/LICENSES.txt`). The AWS icons
+aren't in the repo: `tools/fetch_icons.py` downloads the official package, which has its own terms.

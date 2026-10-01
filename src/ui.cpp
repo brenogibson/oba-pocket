@@ -4,13 +4,6 @@
 #include "screen.h"
 #include "sound.h"
 
-static const uint16_t C_UI_BG   = M5GFX::color565(0x1C, 0x16, 0x2C);
-static const uint16_t C_UI_TEXT = M5GFX::color565(0xFF, 0xFF, 0xFF);
-static const uint16_t C_UI_DIM  = M5GFX::color565(0xB4, 0xAA, 0xCC);
-static const uint16_t C_UI_BTN  = M5GFX::color565(0x3A, 0x2E, 0x52);
-static const uint16_t C_UI_RED  = M5GFX::color565(0xE5, 0x48, 0x4D);
-static const uint16_t C_UI_GREEN = M5GFX::color565(0x3D, 0xD6, 0x8C);
-
 static constexpr int BTN_X = 36, BTN_Y = 150, BTN_W = 248, BTN_H = 46;
 static constexpr uint32_t HOLD_MS = 3000;
 static constexpr uint32_t ASK_TIMEOUT_MS = 30000;

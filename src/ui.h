@@ -2,6 +2,14 @@
 #include <M5Unified.h>
 #include <vector>
 
+// Cores das telas do sistema (e dos botões do pedido, ext.cpp)
+static const uint16_t C_UI_BG   = M5GFX::color565(0x1C, 0x16, 0x2C);
+static const uint16_t C_UI_TEXT = M5GFX::color565(0xFF, 0xFF, 0xFF);
+static const uint16_t C_UI_DIM  = M5GFX::color565(0xB4, 0xAA, 0xCC);
+static const uint16_t C_UI_BTN  = M5GFX::color565(0x3A, 0x2E, 0x52);
+static const uint16_t C_UI_RED  = M5GFX::color565(0xE5, 0x48, 0x4D);
+static const uint16_t C_UI_GREEN = M5GFX::color565(0x3D, 0xD6, 0x8C);
+
 // Quebra o texto em linhas que cabem em maxW com a fonte atual do sprite
 std::vector<String> wrapText(M5Canvas& c, const String& text, int maxW);
 

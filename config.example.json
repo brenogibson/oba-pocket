@@ -18,5 +18,10 @@
     "demos": null
   },
   "url_hosts": ["aws.amazon.com", "docs.aws.amazon.com", "repost.aws", "github.com", "workshops.aws"],
-  "obas": ["obas", "obas.private"]
+  "obas": ["obas", "obas.private"],
+  "portal": {
+    "users": [{"username": "voce", "email": "voce@exemplo.com"}],
+    "domain": null,
+    "cert_arn": null
+  }
 }

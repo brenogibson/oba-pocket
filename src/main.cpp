@@ -15,12 +15,15 @@
 //     alto-falante e o mic dividem o I2S; com o REC ligado ele fica em silêncio)
 //   - botão do meio: tela de escolha de Obas (só com o REC desligado)
 //   - transcrição ao vivo: o áudio vai direto para o Amazon Transcribe e,
-//     quando alguém fala o nome do Oba, ele comemora e a tela separada
-//     (display/index.html) mostra um card. A bolinha vermelha indica gravação.
+//     quando alguém fala o nome do Oba, ele comemora e o portal (portal/web)
+//     mostra um card. A bolinha vermelha indica gravação.
 //   - agente (Bedrock AgentCore): acompanha a conversa e manda balões de fala
 //     com dicas, logos de serviços e QR codes. O Oba encolhe para o canto e
 //     "fala" o balão; cartas guardadas na manga disparam quando alguém volta
 //     ao assunto.
+//   - fontes externas (ext.h), como a ponte do Claude Code: um rótulo no alto
+//     mostra o que estão fazendo e os pedidos de aprovação abrem num cartão com
+//     Negar e Aprovar por toque (o botão do meio devolve para o terminal)
 // O harness fala com a placa pelo Oba Protocol v1 (docs/protocol.md, protocol.h).
 // Obas novos chegam pelo ar (oba.install, install.h): a placa grava no cartão,
 // confere e pergunta na tela antes de instalar.
@@ -30,8 +33,9 @@
 // arquivo de Oba no cartão, 'A<id>' ativa um Oba, 'L' lista os instalados, 'O'
 // abre a tela de escolha (e fecha, se já estiver nela), 'E<evento>' finge um
 // evento da placa (touch.tap, button.a...), 'C' tenta o cartão de novo, 'F'
-// mostra o tempo de quadro desde o último 'F' e 'Y'/'N' respondem à pergunta
-// da instalação.
+// mostra o tempo de quadro desde o último 'F', 'X<fonte> <json>' finge uma
+// mensagem em ext/<fonte> e 'Y'/'N' respondem à pergunta da instalação (ou ao
+// pedido na tela).
 
 #include <M5Unified.h>
 #include <math.h>
@@ -40,6 +44,7 @@
 #include "behavior.h"
 #include "bubble.h"
 #include "cloud.h"
+#include "ext.h"
 #include "install.h"
 #include "leds.h"
 #include "oba.h"
@@ -50,6 +55,7 @@
 #include "sdcard.h"
 #include "sound.h"
 #include "ui.h"
+#include "vibration.h"
 
 // Brilho da tela (0-255)
 static constexpr uint8_t SCREEN_BRIGHTNESS = 128;  // 50%
@@ -69,16 +75,22 @@ static bool frameSkip = true;
 
 // ---------------------------------------------------------------- input
 
-// Botão de gravação no canto superior esquerdo (área de toque com folga)
+// Botão de gravação no canto superior esquerdo (área de toque com folga; menor
+// com o cartão de pedido na tela, que começa logo ao lado)
 static constexpr int REC_BTN_X = 6, REC_BTN_Y = 6, REC_BTN_W = 78, REC_BTN_H = 22;
 static bool inRecButton(int x, int y) {
-  return x >= 0 && y >= 0 && x < REC_BTN_X + REC_BTN_W + 16 && y < REC_BTN_Y + REC_BTN_H + 16;
+  int m = extShowing() ? 4 : 16;
+  return x >= 0 && y >= 0 && x < REC_BTN_X + REC_BTN_W + m && y < REC_BTN_Y + REC_BTN_H + m;
 }
 
 static void handleTouch(uint32_t now) {
   const auto& td = M5.Touch.getDetail();
   if (td.wasClicked() && inRecButton(td.x, td.y)) {
     cloudSetRecording(!cloudRecording());
+    return;
+  }
+  if (extTouch(td, now)) {  // o pedido na tela fica com o toque
+    petTouch(false, false, td.x, td.y, now);
     return;
   }
   if (td.wasClicked() && bubbleTap(td.x, td.y, now)) return;
@@ -118,6 +130,7 @@ static void drawCloudStatus(uint32_t now) {
 static void render(uint32_t now, float t) {
   rigDraw(canvas, now, t);
   bubbleDraw(canvas, now);
+  extDraw(canvas, now);
   drawCloudStatus(now);
   installDrawStatus(canvas);  // só durante uma instalação
   canvas.pushSprite(0, 0);
@@ -194,6 +207,7 @@ static void applyOba() {
 // "@@GO" pede o próximo, para o buffer da serial não transbordar. No fim,
 // "@@OK" ou "@@ERR <motivo>".
 static void receiveFile(const String& args) {
+  vibrationStop();  // o upload segura o loop
   int sp = args.lastIndexOf(' ');
   String path = sp > 0 ? args.substring(0, sp) : "";
   long size = sp > 0 ? args.substring(sp + 1).toInt() : 0;
@@ -241,6 +255,7 @@ static void receiveFile(const String& args) {
 // Botão do meio: tela de escolha. Com o REC ligado ela não abre, para a troca
 // não cortar a transcrição no meio da reunião.
 static void openPicker() {
+  vibrationStop();  // a tela de escolha segura o loop, que é quem anda com a vibração
   if (cloudRecording()) {
     uiNotice(canvas, "Desligue o REC antes", "A troca de Oba só abre com o microfone desligado.");
     delay(1800);
@@ -284,6 +299,7 @@ static void listObas() {
 // O cartão SD guarda os Obas. Sem FAT32 a placa pergunta antes de formatar,
 // porque formatar apaga tudo o que tem nele.
 static void setupCard() {
+  vibrationStop();  // a pergunta segura o loop
   if (sdBegin() != SdState::Unformatted) return;
   if (!uiConfirmHold(canvas, "Formatar o cartão?",
                      "Ele não está em FAT32, e os Obas ficam nele. Formatar apaga tudo o que tem no cartão.",
@@ -315,6 +331,7 @@ void setup() {
     Serial.println("falha ao criar o buffer da tela");
   }
   bubbleBegin(&canvas);
+  extBegin(&canvas);
   setupCard();
   installRecover();  // sobras de uma instalação que não terminou
   obaBegin();
@@ -344,12 +361,12 @@ void loop() {
 
   petSense(now);
   handleTouch(now);
-  if (M5.BtnA.wasClicked()) protoButton('a', now);
-  if (M5.BtnB.wasClicked() && bubbleIdle()) {
+  if (M5.BtnA.wasClicked() && !extShowing()) protoButton('a', now);
+  if (M5.BtnB.wasClicked() && !extSkip(now) && bubbleIdle() && !extAsking()) {
     openPicker();
     frameSkip = true;
   }
-  if (M5.BtnC.wasClicked()) protoButton('c', now);
+  if (M5.BtnC.wasClicked() && !extShowing()) protoButton('c', now);
   if (protoUpdate(now)) applyOba();  // o harness trocou o Oba
   if (installUpdate(canvas, now)) applyOba();  // instalou o ativo (ou pediram para ativar)
   if (installBlocked()) frameSkip = true;
@@ -358,8 +375,9 @@ void loop() {
     pet.lastActivity = now;
     petReact(Event::Wake, now);
   }
+  extUpdate(now);  // antes do balão: pedido na fila segura o próximo balão
   bubbleUpdate(now);
-  petUpdate(now, bubbleShowing());
+  petUpdate(now, bubbleShowing() || extShowing());
   render(now, t);
   // Serial para testes: 'S' tira print, 'R' liga/desliga a gravação,
   // 'T<frase>' finge que alguém falou a frase (dispara cartas da manga)
@@ -380,7 +398,13 @@ void loop() {
     if (c == 'U') receiveFile(Serial.readStringUntil('\n'));
     if (c == 'A') activate(Serial.readStringUntil('\n'));
     if (c == 'L') listObas();
-    if (c == 'O' && bubbleIdle()) openPicker();  // como o botão do meio
+    if (c == 'O' && bubbleIdle() && !extAsking()) openPicker();  // como o botão do meio
+    if (c == 'X') {
+      String line = Serial.readStringUntil('\n');
+      int sp = line.indexOf(' ');
+      if (sp > 0) extInject(line.substring(0, sp), line.substring(sp + 1), now);
+    }
+    if (c == 'Y' || c == 'N') extAnswer(c == 'Y', now);
     if (c == 'E') {
       String type = Serial.readStringUntil('\n');
       type.trim();

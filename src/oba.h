@@ -14,10 +14,13 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include "vibration.h"
 
-// Os humores do motor. Cada Oba escolhe como eles aparecem.
-enum class Mood : uint8_t { Idle, Scared, Shy, Happy, Dizzy, Sleepy };
-static constexpr int MOOD_COUNT = 6;
+// Os humores do motor. Cada Oba escolhe como eles aparecem. Busy e Alert vêm
+// das fontes externas (ext.cpp): nem os reflexos nem o agente mandam neles.
+enum class Mood : uint8_t { Idle, Scared, Shy, Happy, Dizzy, Sleepy, Busy, Alert };
+static constexpr int MOOD_COUNT = 8;
+inline bool moodExternal(Mood m) { return m == Mood::Busy || m == Mood::Alert; }
 const char* moodName(Mood m);
 bool moodByName(const char* name, Mood* out);
 
@@ -66,6 +69,7 @@ struct Reflex {
   Mood mood;      // ToMood
   uint8_t moods;  // em quais humores vale (bit 1 << humor)
   String sound;   // nome de um som do Oba; "" = sem som
+  VibPattern vibrate;  // steps = 0: não vibra
 };
 
 struct Pt { float x, y; };

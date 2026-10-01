@@ -25,7 +25,9 @@
         "shy": { "$ref": "#/$defs/mood" },
         "happy": { "$ref": "#/$defs/mood" },
         "dizzy": { "$ref": "#/$defs/mood" },
-        "sleepy": { "$ref": "#/$defs/mood" }
+        "sleepy": { "$ref": "#/$defs/mood" },
+        "busy": { "$ref": "#/$defs/mood" },
+        "alert": { "$ref": "#/$defs/mood" }
       }
     },
     "reflexes": {
@@ -64,13 +66,13 @@
   },
   "$defs": {
     "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
-    "mood_name": { "enum": ["idle", "scared", "shy", "happy", "dizzy", "sleepy"] },
+    "mood_name": { "enum": ["idle", "scared", "shy", "happy", "dizzy", "sleepy", "busy", "alert"] },
     "pt": { "type": "array", "prefixItems": [{ "type": "number" }, { "type": "number" }], "minItems": 2, "maxItems": 2 },
     "path": {
       "type": "string",
-      "description": "Caminho relativo na pasta do Oba: só A-Z a-z 0-9 . _ / -, até 64 caracteres e 4 pastas, sem \"..\" nem \"//\", sem começar com / ou . e sem terminar em /",
+      "description": "Caminho relativo na pasta do Oba: só A-Z a-z 0-9 . _ / -, até 64 caracteres e 4 pastas, sem \"..\" nem \"//\", sem começar com / ou ., sem terminar em / e sem . antes de / ou no fim (o FAT tira esse ponto)",
       "maxLength": 64,
-      "pattern": "^(?!.*\\.\\.)(?!.*//)(?!.*/$)(?!(?:[^/]*/){5})[A-Za-z0-9_-][A-Za-z0-9._/-]*$"
+      "pattern": "^(?!.*\\.\\.)(?!.*//)(?!.*/$)(?!.*\\.(?:/|$))(?!(?:[^/]*/){5})[A-Za-z0-9_-][A-Za-z0-9._/-]*$"
     },
     "sound_name": { "type": "string", "pattern": "^[a-z0-9_-]{1,31}$" },
 
@@ -251,7 +253,9 @@
             "shy": { "$ref": "#/$defs/frames" },
             "happy": { "$ref": "#/$defs/frames" },
             "dizzy": { "$ref": "#/$defs/frames" },
-            "sleepy": { "$ref": "#/$defs/frames" }
+            "sleepy": { "$ref": "#/$defs/frames" },
+            "busy": { "$ref": "#/$defs/frames" },
+            "alert": { "$ref": "#/$defs/frames" }
           }
         },
         "shadow": { "$ref": "#/$defs/shadow" },
@@ -323,7 +327,10 @@
         },
         "ms": { "type": "integer", "minimum": 0, "description": "Quanto dura. No idle: tempo sem interação até ir para then (0 = nunca)" },
         "quiet_ms": { "type": "integer", "minimum": 0, "description": "Só sai depois desse tempo sem barulho alto" },
-        "then": { "$ref": "#/$defs/mood_name" }
+        "then": {
+          "description": "busy e alert não: eles vêm das fontes externas",
+          "enum": ["idle", "scared", "shy", "happy", "dizzy", "sleepy"]
+        }
       }
     },
 
@@ -339,7 +346,23 @@
         },
         "from": { "type": "array", "items": { "$ref": "#/$defs/mood_name" }, "description": "Só nestes humores" },
         "except": { "type": "array", "items": { "$ref": "#/$defs/mood_name" }, "description": "Em todos menos estes" },
-        "sound": { "$ref": "#/$defs/sound_name", "description": "Nome de um som de sounds para tocar junto (só com o REC desligado)" }
+        "sound": { "$ref": "#/$defs/sound_name", "description": "Nome de um som de sounds para tocar junto (só com o REC desligado)" },
+        "vibrate": {
+          "type": "object",
+          "required": ["ms"],
+          "additionalProperties": false,
+          "description": "Vibra junto (requires precisa ter \"vibration\")",
+          "properties": {
+            "ms": {
+              "description": "Quanto tempo vibra, ou um padrão: liga, desliga, liga… (ms). Somando tudo, até 2000",
+              "oneOf": [
+                { "type": "integer", "minimum": 20, "maximum": 2000 },
+                { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "integer", "minimum": 20, "maximum": 2000 } }
+              ]
+            },
+            "level": { "type": "integer", "minimum": 1, "maximum": 255, "description": "Força (padrão 200)" }
+          }
+        }
       },
       "not": { "required": ["from", "except"] }
     },

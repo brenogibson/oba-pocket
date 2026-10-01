@@ -12,7 +12,7 @@
 static constexpr size_t REFLEX_MAX = 32;
 static constexpr size_t WAKE_WORD_MAX = 8;
 
-static const char* const MOOD_NAMES[MOOD_COUNT] = {"idle", "scared", "shy", "happy", "dizzy", "sleepy"};
+static const char* const MOOD_NAMES[MOOD_COUNT] = {"idle", "scared", "shy", "happy", "dizzy", "sleepy", "busy", "alert"};
 static const char* const EVENT_NAMES[EVENT_COUNT] = {"touch.tap", "sound.loud", "sound.voice", "imu.shake",
                                                      "imu.tap",   "wake",       "bubble.open"};
 static const char* const EYES_NAMES[] = {"open", "closing", "happy", "scared", "spiral", "covered"};
@@ -166,6 +166,24 @@ static void defaultMoods(MoodSpec* m, uint32_t bg, uint32_t blush, uint32_t star
   sleepy.leds = led(LedFx::Breathe, bg, 0.05f, 0.3f, 0.6f);
   sleepy.ms = 0;
   sleepy.then = Mood::Happy;
+
+  // Os de fora duram enquanto a fonte quiser (ext.cpp): ms não conta
+  MoodSpec& busy = m[(int)Mood::Busy];
+  busy.bob = curve(Motion::Sin, 5, 3);
+  busy.squash = curve(Motion::Sin, 5, 0.02f);
+  busy.wave = constant(5);
+  busy.cheeks = Cheeks::Off;
+  busy.leds = led(LedFx::Chase, star, 0, 1, 1, 90);
+  busy.leds.trail = bg;
+  busy.ms = 0;
+
+  MoodSpec& alert = m[(int)Mood::Alert];
+  alert.bob = curve(Motion::Bounce, 7, 8);
+  alert.squash = curve(Motion::Bounce, 7, 0.04f);
+  alert.wave = constant(5);
+  alert.cheeks = Cheeks::Off;
+  alert.leds = led(LedFx::Breathe, 0xFFB000, 0.1f, 1, 6);
+  alert.ms = 0;
 }
 
 static bool parseMood(JsonObjectConst o, MoodSpec& m, const char* name, String& err) {
@@ -197,7 +215,7 @@ static bool parseMood(JsonObjectConst o, MoodSpec& m, const char* name, String& 
 
   m.ms = o["ms"] | m.ms;
   m.quietMs = o["quiet_ms"] | m.quietMs;
-  if (o["then"].is<const char*>() && !moodByName(o["then"].as<const char*>(), &m.then)) {
+  if (o["then"].is<const char*>() && (!moodByName(o["then"].as<const char*>(), &m.then) || moodExternal(m.then))) {
     return err = String("moods.") + name + ".then desconhecido", false;
   }
   return true;
@@ -249,6 +267,34 @@ static void defaultReflexes(std::vector<Reflex>& r) {
   };
 }
 
+// "vibrate": {"ms": 150} ou {"ms": [liga, desliga, liga...], "level": 1..255}
+static bool parseVibrate(JsonVariantConst v, VibPattern& p, String& err) {
+  p = VibPattern{};
+  JsonVariantConst ms = v["ms"];
+  uint32_t total = 0;
+  auto add = [&](JsonVariantConst s) {
+    if (!s.is<int>() || p.steps >= VIBRATION_STEPS_MAX) return false;
+    int n = s.as<int>();
+    if (n < (int)VIBRATION_STEP_MIN_MS || n > (int)VIBRATION_MS_MAX) return false;
+    p.ms[p.steps++] = n;
+    total += n;
+    return true;
+  };
+  if (ms.is<JsonArrayConst>()) {
+    for (JsonVariantConst s : ms.as<JsonArrayConst>()) {
+      if (!add(s)) return err = ".ms: até 8 passos, cada um de 20 a 2000 ms", false;
+    }
+  } else if (!add(ms)) {
+    return err = ".ms: de 20 a 2000 ms, ou uma lista deles", false;
+  }
+  if (!p.steps || total > VIBRATION_MS_MAX) return err = ".ms: somando tudo, de 20 a 2000 ms", false;
+  int level = v["level"] | (int)VIBRATION_LEVEL;
+  if (!v["level"].isNull() && !v["level"].is<int>()) level = 0;
+  if (level < 1 || level > 255) return err = ".level: de 1 a 255", false;
+  p.level = level;
+  return true;
+}
+
 static bool parseReflexes(JsonArrayConst arr, const ObaSpec& spec, std::vector<Reflex>& out, String& err) {
   out.clear();
   const uint8_t ALL = (1 << MOOD_COUNT) - 1;
@@ -264,7 +310,7 @@ static bool parseReflexes(JsonArrayConst arr, const ObaSpec& spec, std::vector<R
     if (!strcmp(act, "glance")) r.act = Reflex::Glance;
     else if (!strcmp(act, "turn")) r.act = Reflex::Turn;
     else if (!strcmp(act, "none")) r.act = Reflex::None;
-    else if (moodByName(act, &r.mood)) r.act = Reflex::ToMood;
+    else if (moodByName(act, &r.mood) && !moodExternal(r.mood)) r.act = Reflex::ToMood;
     else return err = where + ".do desconhecido", false;
     r.moods = ALL;
     uint8_t mask;
@@ -278,6 +324,10 @@ static bool parseReflexes(JsonArrayConst arr, const ObaSpec& spec, std::vector<R
     if (!o["sound"].isNull()) {
       r.sound = o["sound"] | "";
       if (!spec.sound(r.sound.c_str())) return err = where + ".sound: não existe em sounds", false;
+    }
+    if (!o["vibrate"].isNull()) {
+      String why;
+      if (!parseVibrate(o["vibrate"], r.vibrate, why)) return err = where + ".vibrate" + why, false;
     }
     out.push_back(r);
   }
@@ -535,6 +585,11 @@ bool obaParse(const char* json, size_t len, ObaSpec& out, String& err) {
   for (JsonVariantConst v : doc["requires"].as<JsonArrayConst>()) out.requires.push_back(v | "");
   if (out.sounds.size() && std::find(out.requires.begin(), out.requires.end(), "speaker") == out.requires.end()) {
     return err = "com sounds, requires precisa ter \"speaker\"", false;
+  }
+  for (const Reflex& r : out.reflexes) {
+    if (r.vibrate.steps && std::find(out.requires.begin(), out.requires.end(), "vibration") == out.requires.end()) {
+      return err = "com vibrate nos reflexos, requires precisa ter \"vibration\"", false;
+    }
   }
   out.agentEvents.clear();
   for (JsonVariantConst t : doc["agent"]["triggers"].as<JsonArrayConst>()) {

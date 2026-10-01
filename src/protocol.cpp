@@ -5,9 +5,11 @@
 #include "behavior.h"
 #include "bubble.h"
 #include "cloud.h"
+#include "ext.h"
 #include "install.h"
 #include "sdcard.h"
 #include "sound.h"
+#include "vibration.h"
 
 // Intervalo mínimo entre dois eventos do mesmo tipo
 static struct { const char* type; uint32_t ms, last; } limits[] = {
@@ -17,8 +19,7 @@ static struct { const char* type; uint32_t ms, last; } limits[] = {
 
 // Limites dos comandos
 static constexpr uint32_t LOOK_MS = 1500, LOOK_MS_MAX = 5000;
-static constexpr uint32_t VIBRATE_MS = 200, VIBRATE_MS_MAX = 2000;
-static constexpr uint8_t VIBRATE_LEVEL = 200;
+static constexpr uint32_t VIBRATE_MS = 200;
 static constexpr uint32_t LEDS_HOLD_MS = 5000, LEDS_HOLD_MS_MAX = 60000;
 static constexpr int PLAY_VOLUME = 128;
 
@@ -32,7 +33,6 @@ static bool lastRec = false;
 static int batteryPct = -1;
 static bool charging = false;
 static uint32_t nextBattery = 0;
-static uint32_t vibrateUntil = 0;
 static LedFx ledsFx;
 static uint32_t ledsUntil = 0;
 
@@ -127,7 +127,7 @@ static void publishState() {
   }
   JsonArray caps = d["caps"].to<JsonArray>();
   for (const char* c : {"display", "touch", "buttons", "imu", "mic.level", "mic.transcribe", "leds", "vibration",
-                        "battery"}) {
+                        "battery", "ext"}) {
     caps.add(c);
   }
   if (M5.Speaker.isEnabled()) caps.add("speaker");
@@ -136,6 +136,7 @@ static void publishState() {
   JsonObject bat = d["battery"].to<JsonObject>();
   bat["pct"] = batteryPct;
   bat["charging"] = charging;
+  extState(d);
   send(Channel::State, d);
   statePending = false;
   Serial.printf("[proto] state: %s, rec %d, bateria %d%%\n", oba().id.c_str(), cloudRecording(), batteryPct);
@@ -195,6 +196,37 @@ static void read(JsonDocument& cmd) {
   send(Channel::Reply, r);
 }
 
+void protoVibrate(uint32_t ms, int level, uint32_t now) {
+  VibPattern p{};
+  p.ms[0] = ms;
+  p.steps = 1;
+  p.level = level < 1 ? 1 : level > 255 ? 255 : level;
+  vibrationStart(p, now);
+}
+
+bool protoEffect(const JsonDocument& cmd, uint32_t now, String& err) {
+  const char* type = cmd["type"] | "";
+  if (!strcmp(type, "react")) {
+    if (!petAct(cmd["do"] | "", now)) err = "do desconhecido";
+  } else if (!strcmp(type, "vibrate")) {
+    protoVibrate(clampMs(cmd["ms"], VIBRATE_MS, VIBRATION_MS_MAX), cmd["level"] | (int)VIBRATION_LEVEL, now);
+  } else if (!strcmp(type, "leds")) {
+    LedFx fx;
+    if (!obaParseLeds(cmd.as<JsonObjectConst>(), fx)) {
+      err = "fx desconhecido";
+    } else {
+      ledsFx = fx;
+      ledsUntil = now + clampMs(cmd["hold_ms"], LEDS_HOLD_MS, LEDS_HOLD_MS_MAX);
+    }
+  } else if (!strcmp(type, "play")) {
+    int vol = cmd["volume"] | PLAY_VOLUME;
+    soundPlay(cmd["sound"] | "", vol < 1 ? 1 : vol > 255 ? 255 : vol, err);
+  } else {
+    return false;
+  }
+  return true;
+}
+
 // Devolve true se trocou o Oba ativo. chunk: era um pedaço de instalação.
 static bool handle(const String& json, uint32_t now, bool& chunk) {
   JsonDocument cmd;
@@ -204,29 +236,18 @@ static bool handle(const String& json, uint32_t now, bool& chunk) {
   chunk = !strcmp(type, "oba.chunk");
   if (!chunk) Serial.printf("[proto] comando %s\n", type);  // os pedaços são muitos
 
-  if (!strcmp(type, "react")) {
-    if (!petAct(cmd["do"] | "", now)) reply(id, type, false, "do desconhecido");
+  String err;
+  if (protoEffect(cmd, now, err)) {
+    if (err.length()) reply(id, type, false, err);
   } else if (!strcmp(type, "look")) {
     petLookAt(cmd["x"] | 0.f, cmd["y"] | 0.f, clampMs(cmd["ms"], LOOK_MS, LOOK_MS_MAX), now);
-  } else if (!strcmp(type, "vibrate")) {
-    int level = cmd["level"] | VIBRATE_LEVEL;
-    M5.Power.setVibration(level < 1 ? 1 : level > 255 ? 255 : level);
-    vibrateUntil = now + clampMs(cmd["ms"], VIBRATE_MS, VIBRATE_MS_MAX);
-  } else if (!strcmp(type, "leds")) {
-    LedFx fx;
-    if (!obaParseLeds(cmd.as<JsonObjectConst>(), fx)) return reply(id, type, false, "fx desconhecido"), false;
-    ledsFx = fx;
-    ledsUntil = now + clampMs(cmd["hold_ms"], LEDS_HOLD_MS, LEDS_HOLD_MS_MAX);
-  } else if (!strcmp(type, "play")) {
-    int vol = cmd["volume"] | PLAY_VOLUME;
-    String err;
-    if (!soundPlay(cmd["sound"] | "", vol < 1 ? 1 : vol > 255 ? 255 : vol, err)) reply(id, type, false, err);
   } else if (!strcmp(type, "read")) {
     read(cmd);
   } else if (!strcmp(type, "oba.activate")) {
     String target = cmd["target"] | "", err;
     if (cloudRecording()) err = "desligue o REC antes";
     else if (!bubbleIdle()) err = "tem um balão na tela";
+    else if (extShowing()) err = "tem um pedido na tela";
     else if (target == oba().id) return reply(id, type, true), false;
     else if (obaActivate(target, err)) return reply(id, type, true), true;
     reply(id, type, false, err);
@@ -259,10 +280,7 @@ bool protoUpdate(uint32_t now) {
     delete cmd;
     if (chunk) break;
   }
-  if (vibrateUntil && (int32_t)(now - vibrateUntil) >= 0) {
-    M5.Power.setVibration(0);
-    vibrateUntil = 0;
-  }
+  vibrationUpdate(now);
 
   if (cloudRecording() != lastRec) {
     lastRec = !lastRec;
@@ -282,6 +300,8 @@ bool protoUpdate(uint32_t now) {
   if (statePending && cloudOnline()) publishState();
   return changed;
 }
+
+void protoStateChanged() { statePending = true; }
 
 void protoObasChanged() {
   installed = obaList();

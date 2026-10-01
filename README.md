@@ -15,16 +15,19 @@ biblioteca de Obas. Sem cartão, a placa usa o Oba embutido, o Nimbo (`obas/nimb
 ## O que ele faz
 
 - **Reage na hora, sem nuvem:** toque, chacoalhão, batidinha e barulho viram humores,
-  sons e LEDs, pela tabela de reflexos do Oba.
+  sons, LEDs e vibração, pela tabela de reflexos do Oba.
 - **Acompanha uma reunião:** com o REC ligado, o áudio vai direto da placa para o
   Amazon Transcribe. O agente lê as legendas e responde com um balão na hora ou com
   uma "carta na manga", uma regra que dispara na placa quando alguém volta ao assunto.
-  Quando o REC desliga, o resumo aparece na tela separada.
+  Quando o REC desliga, o resumo aparece no portal.
 - **Atende pelo nome:** com o REC ligado, falar o nome do Oba faz ele reagir na hora e
   publica o evento `wake`. O agente só acorda com isso se o Oba tiver `{"on": "wake"}`
   em `agent.triggers`.
-- **Troca de Oba pelo ar:** `tools/oba.py install` manda um Oba pelo MQTT, a placa
-  confere o sha256 de cada arquivo e pergunta na tela antes de instalar.
+- **Troca de Oba pelo ar:** o portal (ou o `tools/oba.py install`) manda um Oba pelo
+  MQTT, e a placa confere o sha256 de cada arquivo e pergunta na tela antes de instalar.
+- **Portal no celular:** um site com login mostra as legendas, as cartas e o resumo, o
+  estado da placa e os Obas do registro, com prévia. Também recebe um Oba novo em zip.
+  Não precisa de computador por perto.
 - **Dois tipos de corpo:** vetorial (rig), como o Nimbo, ou pixel art em PNG com sons
   WAV, como o Bit (`obas/bit`).
 
@@ -37,9 +40,9 @@ flowchart LR
   subgraph rede["WiFi da placa, gravado no firmware"]
     placa["Placa (Core2)<br/>certificado X.509 próprio"]
   end
-  subgraph pc["Qualquer computador"]
-    tela["Navegador<br/>display/"]
-    cli["CLI<br/>tools/oba.py"]
+  subgraph pc["Celular ou computador"]
+    nav["Portal no navegador<br/>portal/web/"]
+    cli["CLI, opcional<br/>tools/oba.py"]
   end
   subgraph aws["Sua conta da AWS"]
     cred["IoT credentials provider"]
@@ -50,7 +53,11 @@ flowchart LR
     bedrock["Amazon Bedrock"]
     ddb[("DynamoDB<br/>sessão e memória")]
     s3[("S3<br/>registro de Obas")]
-    cognito["Cognito<br/>sem login"]
+    cf["CloudFront<br/>a única entrada pública"]
+    site[("S3 privado<br/>o site")]
+    api["API do portal<br/>Lambda, só pelo CloudFront"]
+    inst["Instalador<br/>Lambda"]
+    cognito["Cognito<br/>login e credenciais de leitura"]
   end
   subgraph ext["Internet"]
     mcp["MCPs do catálogo"]
@@ -65,8 +72,15 @@ flowchart LR
   agent --> mcp
   router --- ddb
   router --- s3
-  tela <-->|"credenciais só de leitura"| cognito
-  tela -->|"assina os tópicos da placa"| iot
+  nav <-->|"usuário e senha"| cognito
+  nav -->|"HTTPS"| cf
+  cf -->|"OAC"| site
+  cf -->|"/api/*, OAC"| api
+  nav -->|"só lê os tópicos da placa"| iot
+  api -->|"comandos da tela da placa"| iot
+  api -->|"Obas em zip"| s3
+  api -->|"instalar"| inst
+  inst -->|"oba.install em pedaços"| iot
   cli <-->|"cmd e reply, perfil da AWS CLI"| iot
   cli -->|"sobe os Obas"| s3
 ```
@@ -82,10 +96,14 @@ flowchart LR
   genérico no Amazon Bedrock AgentCore, montado a partir do `agent` do `oba.json`
   (persona, modelo, habilidades, MCPs de uma lista permitida). Qualquer agente que
   siga o [contrato](docs/protocol.md#contrato-roteador--agente) pode ser o cérebro de um Oba.
-- **Tela separada** (`display/`): uma página que mostra as legendas, as cartas e o
-  resumo. Só lê os tópicos da placa.
-- **CLI** (`tools/oba.py`): instala, ativa e remove Obas pela nuvem, com o perfil da
-  AWS CLI, e sobe os Obas para o registro.
+- **Portal** (`portal/`): um site no CloudFront, com login no Cognito, pensado para o
+  celular. A aba Reunião mostra as legendas, as cartas e o resumo. A aba Placa mostra o
+  estado e manda os comandos que a tela da placa oferece: ativar, remover, tocar um som e
+  desligar o REC. A aba Obas lista o registro com prévia e instala na placa, e a aba
+  Enviar recebe um Oba novo em zip. O navegador só lê os tópicos da placa; o resto passa
+  pela API (`portal/api/`). Detalhes em [Portal](#portal).
+- **CLI** (`tools/oba.py`): faz o mesmo pela linha de comando, com o perfil da AWS CLI e
+  sem o limite de 4 MB do portal.
 
 Quase tudo fica na `region` do `config.json`. O Transcribe fica em `transcribe.region`,
 perto da placa. O Bedrock usa um perfil de inferência, que distribui as chamadas entre as
@@ -95,8 +113,8 @@ policy do agente libera.
 ### Por que na nuvem
 
 O Oba Pocket foi feito para andar com você. Onde a placa tiver internet, ela fala
-direto com a AWS e o Oba funciona sem nenhum servidor seu ligado. A tela separada é só
-uma página estática, aberta num navegador.
+direto com a AWS e o Oba funciona sem nenhum servidor seu ligado. O portal é um site
+estático no CloudFront, e a API dele é uma Lambda que só roda quando alguém usa.
 
 - **Cada placa tem a sua identidade.** O `setup.py` gera a chave e um CSR na sua
   máquina, e o IoT Core emite o certificado. A chave fica no `src/secrets.h` (fora do
@@ -127,16 +145,44 @@ de casa, o hotspot do celular resolve.
 | | Na nuvem (como está) | Local |
 |---|---|---|
 | Onde funciona | onde a placa tiver internet, pela rede gravada nela (ou um hotspot) | só na rede do harness, ou por VPN |
-| O que fica ligado | nenhum servidor seu; a tela é uma página aberta num navegador | uma máquina com o broker, o roteador e o agente |
-| Segurança | mTLS por placa, policy por tópico, credenciais temporárias. A tela usa Cognito sem login: quem tiver o `display/config.js` lê as legendas e os resumos da placa, então não publique a página sem autenticação | você configura: TLS e usuários no broker |
-| Custo | pago pelo uso, sem mensalidade: minutos do Transcribe, tokens do Bedrock, AgentCore, Lambda, IoT Core, DynamoDB, S3 e CloudWatch Logs (o armazenamento no S3 e nos logs cobra mesmo parado) | a máquina; nada de nuvem se a fala e o modelo também forem locais |
+| O que fica ligado | nenhum servidor seu; o portal é um site estático e Lambdas que só rodam quando usadas | uma máquina com o broker, o roteador e o agente |
+| Segurança | mTLS por placa, policy por tópico, credenciais temporárias. O portal exige login, e só o CloudFront atende a internet ([Portal](#portal)) | você configura: TLS e usuários no broker |
+| Custo | pago pelo uso, sem mensalidade: minutos do Transcribe, tokens do Bedrock, AgentCore, Lambda, IoT Core, DynamoDB, S3, CloudFront e CloudWatch Logs (o armazenamento no S3 e nos logs cobra mesmo parado) | a máquina; nada de nuvem se a fala e o modelo também forem locais |
 | Agente na sua rede | só por uma URL pública (um túnel, por exemplo) | direto |
 | Áudio e legendas | passam pela sua conta da AWS | ficam na sua rede, se a fala e o modelo também forem locais |
+
+### Portal
+
+Da sua conta, só o CloudFront atende a internet. Os endpoints da própria AWS (o login do
+Cognito e o IoT Core, que a placa já usa) são os de sempre.
+
+- **Login:** usuário e senha no Cognito, na página de login dele, em português. Só entra
+  quem estiver em `portal.users` no `config.json`. Cinco senhas erradas seguidas
+  bloqueiam o usuário por um tempo que vai crescendo.
+- **Nada fica exposto:** o bucket do site é privado, e a API é uma Function URL com
+  autenticação IAM. Os dois só aceitam pedidos assinados pela distribuição (OAC). Não tem
+  site do S3, API Gateway, balanceador nem security group aberto.
+- **A API confere o token do Cognito em todo pedido.** Ele vai em `x-oba-token`, porque
+  o OAC ocupa o `Authorization`. A API só aceita os comandos que a tela da placa oferece;
+  ligar o REC continua só pelo botão da placa.
+- **O navegador só lê.** As credenciais do identity pool valem 1 h e se renovam sozinhas.
+  Elas abrem o MQTT por WebSocket e só assinam `<prefixo>/<placa>/*`. A policy do IoT é
+  anexada pela API a cada login: com `iot:AttachPolicy`, o navegador conseguiria se
+  anexar qualquer policy.
+- **Obas em zip:** até 4 MB. A API confere o zip como o `tools/oba.py validate` e recusa
+  symlink, `..` e zip bomb antes de subir para o registro. Para instalar, outra Lambda
+  (o instalador) manda o Oba em pedaços para a placa, que pede o toque em "Instalar".
+- **CSP estrito:** nada de script de fora nem código inline; as bibliotecas vêm em
+  `portal/web/vendor/`. O refresh token fica no navegador por 30 dias, e "Sair" revoga.
+
+Para cortar alguém, desative o usuário no Cognito (`admin-disable-user`) e faça o
+sign-out global (`admin-user-global-sign-out`). O identity pool confere o token no
+Cognito e para de dar credenciais.
 
 ### Rodar local
 
 O protocolo não depende da AWS e, no firmware, toda a rede (MQTT, credenciais e o
-stream do Transcribe) fica em `src/cloud.cpp`. O harness, a tela e a CLI usam serviços
+stream do Transcribe) fica em `src/cloud.cpp`. O harness, o portal e a CLI usam serviços
 da AWS. Para rodar tudo numa rede local, teria que mudar:
 
 - **Broker:** um broker MQTT (o Mosquitto, por exemplo) no lugar do IoT Core. O
@@ -156,14 +202,15 @@ da AWS. Para rodar tudo numa rede local, teria que mudar:
   guarda a sessão no DynamoDB e lê o registro do S3: isso vira o broker, um SQLite e
   uma pasta.
 - **Agente:** o `harness/agent/main.py` já roda fora do AgentCore. `python main.py`
-  serve `/invocations` em `127.0.0.1:8080`, a mesma porta da tela do "Subindo"; para
-  mudar a porta ou aceitar outras máquinas, `app.run(port=8081, host="0.0.0.0")`. No
-  catálogo, ele entra como `{"type": "http", "url": "http://localhost:8081/invocations"}`.
+  serve `/invocations` em `127.0.0.1:8080`; para mudar a porta ou aceitar outras
+  máquinas, `app.run(port=8081, host="0.0.0.0")`. No catálogo, ele entra como
+  `{"type": "http", "url": "http://localhost:8080/invocations"}`.
   Sem AWS, o modelo sai do Bedrock para outro provedor do Strands (um modelo local, por
   exemplo).
-- **Tela separada e CLI:** o `display/` passaria a conectar no WebSocket do broker, sem
-  Cognito, e o `tools/oba.py` publicaria pelo broker e gravaria os Obas na pasta do
-  registro, em vez de usar o IoT Core e o S3.
+- **Portal e CLI:** o `portal/web/` passaria a conectar no WebSocket do broker, e a
+  API (`portal/api/`) viraria um processo na rede, com outro login no lugar do Cognito.
+  O `tools/oba.py` publicaria pelo broker e gravaria os Obas na pasta do registro, em
+  vez de usar o IoT Core e o S3.
 
 ## Precisa de
 
@@ -177,22 +224,33 @@ da AWS. Para rodar tudo numa rede local, teria que mudar:
 ## Subindo
 
 ```sh
-cp config.example.json config.json            # prefixo, placa, regiões, idioma, modelos
+cp config.example.json config.json            # prefixo, placa, regiões, modelos, usuários do portal
 python3 -m venv .venv && . .venv/bin/activate
 pip install boto3 jsonschema paho-mqtt pyserial pillow
-python3 setup.py                              # AWS: placa, harness e tela, com menor privilégio
+python3 setup.py                              # AWS: placa, harness e portal, com menor privilégio
 # preencha WIFI_SSID e WIFI_PASS em src/secrets.h (o setup avisa se faltar)
 
 pio run -e core2foraws -t upload              # firmware
-cd display && python3 -m http.server 8080     # tela separada: http://localhost:8080
 ```
 
 O `setup.py` usa o perfil padrão da AWS CLI (ou `AWS_PROFILE`) e pode rodar de novo
 quantas vezes quiser: só muda o que mudou. Ele cria o thing e o certificado, as
 policies, o role alias do Transcribe, o vocabulário, o registro S3, a tabela, a Lambda,
-a IoT Rule do roteador, o runtime do AgentCore e o Cognito da tela. Também gera
-`src/aws_config.h`, `display/config.js` e `src/secrets.h`. A chave privada da placa
-nasce nesta máquina e nunca vai para a AWS.
+a IoT Rule do roteador, o runtime do AgentCore e o portal (bucket, CloudFront, Cognito, a
+API e o instalador), e no fim mostra o endereço do portal. Também gera
+`src/aws_config.h` e `src/secrets.h`. A chave privada da placa nasce nesta máquina e
+nunca vai para a AWS.
+
+No portal:
+
+- **Usuários:** ponha cada um em `portal.users` (`{"username": "…", "email": "…"}`) e
+  rode `python3 setup.py --portal`, que só mexe no portal. O usuário novo recebe por
+  email uma senha temporária, válida por 3 dias. No primeiro login, o Cognito pede uma
+  senha nova, de 12 caracteres ou mais, com maiúscula, minúscula, número e símbolo. Se a
+  temporária vencer, `python3 setup.py --resend <usuário>` manda outra.
+- **Domínio próprio:** `portal.domain` com `portal.cert_arn` (um certificado do ACM em
+  us-east-1). Sem eles, o endereço é o `*.cloudfront.net` da distribuição.
+- **No celular:** "Adicionar à tela de início" abre o portal como um app.
 
 Na placa:
 
@@ -218,6 +276,12 @@ servem de exemplo; o `obas/bit/draw.py` gera os quadros e os sons do Bit.
 Obas que você não quer publicar podem ficar em `obas.private/`: o git ignora a pasta,
 e o `setup.py` também sobe os Obas de lá para o registro.
 
+Pelo portal, zipe a pasta do Oba, com o `oba.json` na raiz do zip ou dentro de uma pasta
+só, e mande na aba Enviar. O portal confere o Oba, sobe para o registro e oferece
+instalar. Cuidado: o `setup.py` sobe de novo os Obas das pastas de `obas` do
+`config.json`, então um Oba com o mesmo id enviado pelo portal volta a ser a versão do
+repositório.
+
 ## Protocolo
 
 O [Oba Protocol v1](docs/protocol.md) usa seis tópicos em `<prefixo>/<placa>/`:
@@ -235,7 +299,7 @@ contrato roteador → agente e a policy IAM mínima da CLI.
 | `harness/agent/` | agente genérico (Strands) e as habilidades (`abilities/`) |
 | `obas/` | Obas públicos: Nimbo e Bit |
 | `schema/` | formato do `oba.json` |
-| `display/` | tela separada no navegador |
+| `portal/` | portal: o site (`web/`), a API e o instalador (`api/`) |
 | `docs/` | protocolo e guia de Obas |
 | `tools/` | monitor serial, validação e instalação de Obas, fontes e ícones |
 
@@ -258,13 +322,16 @@ contrato roteador → agente e a policy IAM mínima da CLI.
 
 ## Segredos
 
-`src/secrets.h` (WiFi, certificado e chave da placa), `src/aws_config.h`,
-`display/config.js` e `config.json` são gerados ou preenchidos por você e ficam fora
-do git. Nada do que está no repo depende de uma conta específica.
+`src/secrets.h` (WiFi, certificado e chave da placa), `src/aws_config.h` e
+`config.json` são gerados ou preenchidos por você e ficam fora do git. O `config.js` do
+portal não é segredo, porque vai para o navegador, mas leva os ids da sua conta. Por
+isso ele nasce em `build/portal/` (fora do git) e vai direto para o bucket. Nada do que
+está no repo depende de uma conta específica.
 
 ## Licença
 
 O código está sob a [licença MIT](LICENSE). A fonte Nunito (`tools/fonts/` e a fonte
 gerada em `src/bubble_fonts.cpp`) segue a [SIL Open Font License 1.1](tools/fonts/Nunito-OFL.txt).
-Os ícones da AWS não vêm no repo: o `tools/fetch_icons.py` baixa o pacote oficial,
+O MQTT.js e o qrcode-generator, em `portal/web/vendor/`, são MIT
+(`portal/web/vendor/LICENSES.txt`). Os ícones da AWS não vêm no repo: o `tools/fetch_icons.py` baixa o pacote oficial,
 que tem os termos dele.

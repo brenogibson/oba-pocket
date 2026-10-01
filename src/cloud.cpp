@@ -26,6 +26,10 @@ static const char* const TOPIC_EVT = TOPIC("evt");
 static const char* const TOPIC_TRANSCRIPT = TOPIC("transcript");
 static const char* const TOPIC_REPLY = TOPIC("reply");
 static const char* const TOPIC_CMD = TOPIC("cmd");
+// Fontes externas: cada uma publica em ext/<fonte> e ouve a resposta em ext/<fonte>/re
+static const char* const TOPIC_EXT = TOPIC("ext/");
+static const char* const TOPIC_EXT_ALL = TOPIC("ext/+");
+static constexpr size_t EXT_SRC_MAX = 64, EXT_JSON_MAX = 4096;
 // Última vontade: o broker publica quando a placa cai
 static const char* const STATE_OFFLINE = "{\"v\":1,\"type\":\"state\",\"online\":false}";
 
@@ -89,9 +93,10 @@ struct Outgoing {
   Channel ch;
   bool publish;
   String evt, json;
+  String to;  // Ext: a fonte que recebe
 };
 
-static QueueHandle_t bubbleQueue, cmdQueue, outbox;
+static QueueHandle_t bubbleQueue, cmdQueue, extQueue, outbox;
 static volatile bool bubbleBusy = false;
 static uint32_t lastFire = 0;
 static String* volatile simulatedLine = nullptr;  // frase de teste vinda da serial
@@ -306,8 +311,24 @@ static const char* const CMD_KEYS[] = {"v",     "type",  "id",    "bubble", "on"
                                        "target", "files", "activate", "path", "off",   "data",  "sound",
                                        "volume"};
 
+// Mensagem de uma fonte externa (ext/<fonte>): só confere o tamanho e o nome e
+// entrega ao loop (ext.cpp), que lê o resto
+static void onExt(const char* src, uint8_t* payload, unsigned int len) {
+  size_t n = strlen(src);
+  bool ok = n > 0 && n <= EXT_SRC_MAX && len <= EXT_JSON_MAX;
+  for (size_t i = 0; ok && i < n; i++) ok = isalnum((unsigned char)src[i]) || strchr(":_-", src[i]);
+  if (!ok) {
+    Serial.printf("[cloud] ext: fonte ou mensagem inválida (%u bytes)\n", len);
+    return;
+  }
+  ExtMessage* m = new ExtMessage{src, String((const char*)payload, len)};
+  if (xQueueSend(extQueue, &m, 0) != pdTRUE) delete m;  // o loop está atrasado: essa fica de fora
+}
+
 // Comandos do harness (TOPIC_CMD). Roda dentro de mqtt.loop(), na task de rede.
 static void onCommand(char* topic, uint8_t* payload, unsigned int len) {
+  size_t extLen = strlen(TOPIC_EXT);
+  if (!strncmp(topic, TOPIC_EXT, extLen)) return onExt(topic + extLen, payload, len);
   JsonDocument filter;
   for (const char* k : CMD_KEYS) filter[k] = true;
   JsonDocument doc;
@@ -412,7 +433,10 @@ static void drainOutbox() {
   Outgoing* m;
   while (xQueueReceive(outbox, &m, 0) == pdTRUE) {
     if (m->ch == Channel::Evt && m->evt.length()) matchEvent(m->evt);
-    if (m->publish && mqtt.connected()) mqtt.publish(TOPICS[(int)m->ch], m->json.c_str(), m->ch == Channel::State);
+    if (m->publish && mqtt.connected()) {
+      if (m->ch == Channel::Ext) mqtt.publish((TOPIC_EXT + m->to + "/re").c_str(), m->json.c_str());
+      else mqtt.publish(TOPICS[(int)m->ch], m->json.c_str(), m->ch == Channel::State);
+    }
     delete m;
   }
 }
@@ -458,6 +482,7 @@ static void connectMqtt() {
     Serial.printf("[cloud] MQTT ok (%s)\n", OBA_PREFIX "/" IOT_THING_NAME);
     stateRequested = true;  // o loop monta o state, que substitui o da última vontade
     if (!mqtt.subscribe(TOPIC_CMD)) Serial.print("[cloud] não consegui assinar os comandos\n");
+    if (!mqtt.subscribe(TOPIC_EXT_ALL, 1)) Serial.print("[cloud] não consegui assinar as fontes externas\n");
   } else {
     Serial.printf("[cloud] MQTT falhou (%d)\n", mqtt.state());
     nextMqttTry = millis() + 5000;
@@ -694,6 +719,7 @@ void cloudBegin() {
   eventBuf = (uint8_t*)malloc(transcribeAudioEventSize(sizeof pcm));
   bubbleQueue = xQueueCreate(4, sizeof(Bubble*));
   cmdQueue = xQueueCreate(8, sizeof(String*));
+  extQueue = xQueueCreate(8, sizeof(ExtMessage*));
   outbox = xQueueCreate(16, sizeof(Outgoing*));
   xTaskCreatePinnedToCore(cloudTask, "cloud", 16384, nullptr, 3, nullptr, 0);
 }
@@ -730,11 +756,21 @@ String* cloudTakeCommand() {
   return xQueueReceive(cmdQueue, &cmd, 0) == pdTRUE ? cmd : nullptr;
 }
 
+ExtMessage* cloudTakeExt() {
+  ExtMessage* m = nullptr;
+  return xQueueReceive(extQueue, &m, 0) == pdTRUE ? m : nullptr;
+}
+
 bool cloudTakeStateRequest() { return __atomic_exchange_n(&stateRequested, false, __ATOMIC_ACQ_REL); }
 
 void cloudSend(Channel ch, const String& json, const char* evt, bool publish) {
   Outgoing* m = new Outgoing{ch, publish, evt ? evt : "", json};
   if (xQueueSend(outbox, &m, 0) != pdTRUE) delete m;  // a rede está atrasada: essa fica de fora
+}
+
+void cloudSendExt(const String& src, const String& json) {
+  Outgoing* m = new Outgoing{Channel::Ext, true, "", json, src};
+  if (xQueueSend(outbox, &m, 0) != pdTRUE) delete m;
 }
 
 void cloudSimulateLine(const String& text) {

@@ -3,6 +3,7 @@
 #include "behavior.h"
 #include "bubble_fonts.h"
 #include "cloud.h"
+#include "ext.h"
 #include "protocol.h"
 #include "rig.h"
 #include "ui.h"
@@ -143,6 +144,7 @@ void bubbleUpdate(uint32_t now) {
   uint32_t age = now - phaseAt;
   switch (phase) {
     case Phase::None:
+      if (extAsking()) break;  // pedido de aprovação primeiro: o balão espera na fila
       bubble = cloudTakeBubble();
       if (!bubble) break;
       cloudSetBubbleBusy(true);
@@ -192,12 +194,20 @@ void bubbleUpdate(uint32_t now) {
       break;
   }
 
-  // O Oba desliza entre o centro e o canto (fica lá se já tem outro balão na fila)
+  // O Oba desliza entre o centro e o canto (fica lá se já tem outro balão na fila),
+  // ou para o lado do pedido de aprovação
   bool side = phase != Phase::None && (phase != Phase::Gap || cloudBubblePending());
-  float k = 0.2f;
-  pet.x += ((side ? SIDE_X : HOME_X) - pet.x) * k;
-  pet.y += ((side ? SIDE_Y : HOME_Y) - pet.y) * k;
-  pet.scale += ((side ? SIDE_SCALE : 1.f) - pet.scale) * k;
+  float tx = HOME_X, ty = HOME_Y, ts = 1.f, k = 0.2f;
+  if (side) {
+    tx = SIDE_X;
+    ty = SIDE_Y;
+    ts = SIDE_SCALE;
+  } else {
+    extPlacement(&tx, &ty, &ts);
+  }
+  pet.x += (tx - pet.x) * k;
+  pet.y += (ty - pet.y) * k;
+  pet.scale += (ts - pet.scale) * k;
 }
 
 void bubbleDraw(M5Canvas& canvas, uint32_t now) {

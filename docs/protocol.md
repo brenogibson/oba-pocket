@@ -8,7 +8,7 @@ rodar sem ela está em [Rodar local](../README.md#rodar-local).
 ```
  placa ──state (retido)──▶                         ◀──cmd── harness
        ──evt────────────▶  <p>/<dev>/...  broker
-       ──transcript─────▶                         ──ui/<canal>──▶ telas
+       ──transcript─────▶                         ──ui/<canal>──▶ portal
        ──reply──────────▶
 ```
 
@@ -38,10 +38,12 @@ Campos desconhecidos são ignorados. Isso permite acrescentar campos sem mudar a
 | `<p>/<dev>/transcript` | placa | | legendas, só com o REC ligado |
 | `<p>/<dev>/reply` | placa | | respostas de `read` e `oba.*`, e recusas |
 | `<p>/<dev>/cmd` | harness | | comandos para a placa |
-| `<p>/<dev>/ui/<canal>` | harness | depende | telas extras (não vão para a placa) |
+| `<p>/<dev>/ui/<canal>` | harness | depende | para o portal (não vão para a placa) |
+| `<p>/<dev>/ext/<fonte>` | fonte externa | | estado e pedidos de aprovação de outro programa ([abaixo](#fontes-externas-ext)) |
+| `<p>/<dev>/ext/<fonte>/re` | placa | | as respostas da placa para essa fonte |
 
-A placa só assina `cmd`. A policy dela só deixa publicar nos quatro tópicos de cima e
-só na pasta com o próprio nome.
+A placa assina `cmd` e `ext/+`. A policy dela só deixa publicar nos quatro primeiros
+tópicos e em `ext/*/re`, e só na pasta com o próprio nome.
 
 ## Placa → harness
 
@@ -51,14 +53,20 @@ Publicado quando a placa conecta, quando algo nele muda (Oba ativo, Obas instala
 REC, carregando ou não, bateria a cada 5%) e quando chega o comando `state`.
 
 ```json
-{"v": 1, "type": "state", "ts": 1790000000000, "oba": "bit", "online": true, "fw": "0.3.0",
+{"v": 1, "type": "state", "ts": 1790000000000, "oba": "bit", "online": true, "fw": "0.5.0",
  "active": {"id": "bit", "name": "Bit", "version": "1.0.0", "sha256": "<hex>"},
  "obas": [{"id": "nimbo", "name": "Nimbo", "version": "1.0.0", "builtin": true},
           {"id": "bit", "name": "Bit", "version": "1.0.0"}],
  "caps": ["display", "touch", "buttons", "imu", "mic.level", "mic.transcribe", "leds", "vibration", "battery",
-          "speaker", "sd"],
- "rec": false, "battery": {"pct": 87, "charging": true}}
+          "ext", "speaker", "sd"],
+ "rec": false, "battery": {"pct": 87, "charging": true},
+ "ext": [{"src": "obapocket-ponte-mac", "mood": "busy", "asks": 1}]}
 ```
+
+`ext` (desde o 0.4.0) lista as [fontes externas](#fontes-externas-ext) que a placa conhece
+agora, com o humor de cada uma e quantos pedidos dela estão na fila. Sem fontes, a chave
+não vem. O `state` sai de novo quando uma fonte entra ou sai, muda de humor ou muda o
+número de pedidos. O rótulo e o conteúdo dos pedidos não entram no `state`.
 
 `active.sha256` (desde o firmware 0.3.0) é o sha256, em hex minúsculo, dos bytes do `oba.json`
 como está no cartão. No Oba embutido, é o do JSON minificado. O roteador usa para conferir
@@ -117,7 +125,7 @@ para as telas: a placa ignora esse campo.
 | `arm` | `id, on?, words?, ttl_s?, do, card?` | arma uma regra (abaixo) |
 | `disarm` | `id` | tira a regra |
 | `reset` | `session?` | tira todas as regras. `session` é a sessão nova; `null` = acabou |
-| `react` | `do` | um humor (`idle`, `happy`, `scared`, `shy`, `dizzy`, `sleepy`), `glance` ou `turn`, como nos reflexos |
+| `react` | `do` | um humor (`idle`, `happy`, `scared`, `shy`, `dizzy`, `sleepy`), `glance` ou `turn`, como nos reflexos. `busy` e `alert` não: eles vêm das [fontes externas](#fontes-externas-ext) |
 | `look` | `x, y, ms?` | olha para (x, y), de -1 a 1, por até 5 s (padrão 1,5 s) |
 | `vibrate` | `ms?, level?` | vibra por até 2 s (padrão 200 ms), força de 1 a 255 (padrão 200) |
 | `leds` | `fx, color?, trail?, min?, max?, speed?, ms?, hold_ms?` | troca o efeito dos LEDs por `hold_ms` (padrão 5 s, até 60 s). Os campos são os de `leds` nos humores do Oba |
@@ -197,7 +205,8 @@ esperar a nuvem, o que fez as "cartas na manga" parecerem instantâneas.
 
 O `oba.json` e os arquivos de `files` (sprites, sons) vão em pedaços pelo `cmd`. A placa
 grava numa pasta temporária do cartão, confere tamanho e sha256 de cada arquivo, carrega o
-Oba de teste e pergunta na tela se instala. `tools/oba.py install` faz tudo isso.
+Oba de teste e pergunta na tela se instala. `tools/oba.py install` e o instalador do portal
+(`portal/api/installer.py`, que reusa o código da CLI) fazem tudo isso.
 
 1. Cabeçalho, com o `oba.json` exatamente uma vez (a CLI põe por último):
 
@@ -241,26 +250,167 @@ Oba de teste e pergunta na tela se instala. `tools/oba.py install` faz tudo isso
 A IoT Rule do roteador não passa os acks de pedaço (`reply` com `re = 'oba.chunk'`): só quem
 instala precisa deles.
 
-## Harness → telas: `ui/<canal>`
+## Harness → portal: `ui/<canal>`
 
-A placa não assina esses tópicos. Cada tela assina o que precisa.
+A placa não assina esses tópicos. O portal assina todos, e também `state`, `transcript`,
+`evt`, `cmd` e `reply`: o navegador só lê, e os comandos dele passam pela API do portal.
 
 | Canal | Retido | Conteúdo |
 |---|---|---|
-| `ui/oba` | sim | o Oba ativo para desenhar: `{id, name, version, palette, outline, eyes, wake_words}` (rig) ou `{id, name, version, palette, sprites, wake_words}` (sprites) |
+| `ui/oba` | sim | o Oba ativo para desenhar: `{id, name, version, palette, outline, eyes, wake_words, sounds}` (rig) ou `{id, name, version, palette, sprites, wake_words, sounds}` (sprites); `sounds` são os nomes que o `play` aceita |
 | `ui/think` | | `{state: "start" \| "end", run, note?}`: o agente está pensando |
 | `ui/summary` | sim | resumo da reunião: `{session, lines, title, summary, topics, decisions, next_steps, suggestions}` |
+| `ui/install` | | andamento de uma instalação pelo portal (publicado pelo instalador, não pelo roteador): `{cid, id, stage, …}` |
+
+No `ui/install`, `cid` é o `id` do `oba.install` e `id` é o Oba. `stage` vai de `start`
+a `done` ou `error`:
+
+| `stage` | Campos | |
+|---|---|---|
+| `start` | | o instalador pegou o pedido |
+| `send` | `sent, total` (bytes) | enviando os pedaços, no máximo 2 por segundo |
+| `confirm` | `sent, total, wait_s` | tudo chegou; a placa pergunta na tela por até `wait_s` segundos |
+| `done` | `active, version` | instalado (`active: true` se virou o Oba ativo) |
+| `error` | `error` | o motivo, em português (por exemplo `"recusado na placa"`) |
 
 Nos Obas de sprites, `sprites` é `{"size": [w, h], "origin": [x, y], "scale": s, "fps": f, "sheet": "<base64>"}`:
 o `look` do Oba e a folha `idle` (PNG, tira horizontal de quadros de w×h) em base64. A folha
-só vai se tiver até 48 KB e o sha256 de `files` bater; senão `sprites` vem sem `sheet`. A tela
-separada anima essa folha num canvas, com `image-rendering: pixelated`.
+só vai se tiver até 48 KB e o sha256 de `files` bater; senão `sprites` vem sem `sheet`. O portal
+anima essa folha num canvas, com `image-rendering: pixelated`.
 
 Os canais retidos de uma sessão são apagados quando começa outra (payload vazio).
 
 No IoT Core, a mensagem retida só chega a quem assina o tópico exato. Quem assina
-`<p>/<dev>/#` recebe as próximas mensagens, mas não a retida. Por isso a tela assina `state`,
-`ui/oba` e `ui/summary` pelo nome.
+`<p>/<dev>/#` recebe as próximas mensagens, mas não a retida. Por isso o portal assina cada
+tópico pelo nome, em dois SUBSCRIBE: o IoT Core aceita até 8 tópicos em cada um.
+
+## Fontes externas (`ext`)
+
+Outro programa pode mostrar no Oba o que está fazendo e pedir aprovação pela placa. O
+primeiro é a [ponte do Claude Code](ponte.md): enquanto o Claude trabalha, o Oba fica
+ocupado; quando ele pede permissão para uma ferramenta, a placa mostra o pedido e dá para
+aprovar ou negar com um toque.
+
+Cada fonte é um thing do IoT com um certificado próprio (`setup.py --ponte <nome>`). O
+nome do thing é o client ID dela e também o `<fonte>` dos tópicos:
+
+```
+ fonte ──status, ask, ask.cancel, react…──▶  <p>/<dev>/ext/<fonte>     ──▶ placa
+       ◀──reply───────────────────────────  <p>/<dev>/ext/<fonte>/re  ◀── placa
+       ◀──state (retido)──────────────────  <p>/<dev>/state           ◀── placa
+```
+
+A placa aceita até 4 fontes ao mesmo tempo. Nada disso passa pelo roteador: a IoT Rule
+dele só pega `<p>/+/+`.
+
+### A placa não guarda nada retido
+
+A placa assina `ext/+`, e no IoT Core a assinatura com curinga não recebe a mensagem
+retida. Por isso nada em `ext` é retido. Para saber quando a placa (re)conectou, a fonte
+assina o `state` pelo nome exato, que é retido, e confere o `ext` dele:
+
+- a fonte não aparece em `state.ext`: manda o `status` de novo;
+- `state.ext[].asks` é menor que o número de pedidos pendentes: manda os pedidos de novo.
+  A placa não duplica um pedido com o mesmo `id`;
+- `state.ext[].asks` é maior que zero: manda de novo os `ask.cancel` que ainda não
+  venceram. A placa conecta com sessão limpa e pode ter perdido algum, contando um pedido
+  velho no lugar de um novo. Ela ignora o cancel de um `id` que não conhece;
+- `state.online` é `false` (a última vontade da placa): os pedidos pendentes voltam para
+  onde vieram, e os novos nem saem até a placa voltar.
+
+### Fonte → placa
+
+| type | Campos | Efeito |
+|---|---|---|
+| `status` | `mood, label?, ttl_s?` | o estado da fonte. `mood`: `idle`, `busy` ou `alert` |
+| `status` | `online: false` | a fonte saiu (é também a última vontade do MQTT dela) |
+| `ask` | `id, tool?, title, body?, danger?, label?, ttl_s?` | pede aprovação (abaixo) |
+| `ask.cancel` | `id` | o pedido foi respondido em outro lugar: sai da tela e da fila |
+| `react` | `do` | como no `cmd`: `happy`, `scared`, `shy`, `dizzy`, `idle`, `sleepy`, `glance` ou `turn` |
+| `vibrate`, `leds`, `play` | como no `cmd` | como no `cmd` |
+
+O resto é ignorado. Todas levam o envelope (`v`, `type`, `ts`). Sem `ts` (como na última
+vontade), a placa conta atraso zero. Com o relógio certo, ela descarta a mensagem que
+chegar com mais de `ttl_s` (ou 60 s) de atraso e desconta o atraso do `ttl_s` das outras.
+Por isso, ao mandar um pedido de novo, a fonte repete o `ts` de quando ele foi criado.
+
+**`status`:** a fonte manda quando o estado muda e, sem mudança, a cada `ttl_s / 3`.
+Sem `status` novo em `ttl_s` segundos (padrão 180, de 10 a 3600), a placa esquece a
+fonte. `label` tem até 48 caracteres e aparece no alto da tela, por exemplo
+`mac · oba-pocket · Bash`. Os limites de texto contam caracteres, não bytes. A placa
+desenha ASCII, Latin-1 (os acentos) e a pontuação `– — ‘ ’ “ ” • …`; o resto vira `?`.
+
+**O humor do Oba:** as fontes decidem o humor de repouso da placa. Vale o mais urgente
+entre elas: `alert`, depois `busy`, depois `idle`. Os humores passageiros (um toque, um
+`react: happy`) voltam para esse humor de repouso quando acabam, e não para o `idle`.
+Quando o humor de repouso muda, o Oba acorda. Sem fontes, tudo funciona como antes.
+
+**`ask`:**
+
+```json
+{"v": 1, "type": "ask", "ts": 1790000000000, "id": "k3v9x2", "tool": "Bash",
+ "title": "Rodar comando", "body": "rm -rf build/", "danger": true,
+ "label": "mac · oba-pocket", "ttl_s": 280}
+```
+
+| Campo | |
+|---|---|
+| `id` | de 1 a 32 caracteres, só `A-Z`, `a-z`, `0-9`, `_` e `-` |
+| `tool` | o nome da ferramenta, até 40 caracteres |
+| `title` | até 60 caracteres |
+| `body` | o resumo do que vai acontecer, até 1500 caracteres. `\n` quebra linha |
+| `danger` | `true`: aprovar exige segurar o botão por 1,5 s |
+| `label` | de onde veio, até 48 caracteres |
+| `ttl_s` | depois disso o pedido vence (padrão 120, de 10 a 600) |
+
+A placa enfileira até 4 pedidos, de todas as fontes juntas. Com a fila cheia, responde
+`skip` com `error: "fila cheia"`. O pedido aparece quando não tem balão na tela e fica
+até alguém responder, até o `ask.cancel` ou até vencer o `ttl_s`. Ao vencer, a placa
+responde `skip` com `error: "venceu"`.
+
+Na tela, o Oba vai para o canto e o pedido ocupa o resto. Embaixo ficam dois botões de
+toque, **Negar** e **Aprovar**. O botão virtual do meio da placa, **Terminal**, tira o
+pedido da placa sem responder (`skip`). Se o texto tiver mais de uma página, o toque no
+pedido vira a página, e o **Aprovar** só acende depois da última. A placa vibra quando
+um pedido aparece.
+
+### Placa → fonte: `ext/<fonte>/re`
+
+```json
+{"v": 1, "type": "reply", "ts": 1790000000000, "oba": "claude-code", "re": "ask", "id": "k3v9x2",
+ "choice": "allow"}
+```
+
+`choice` é `allow`, `deny` ou `skip`. `skip` quer dizer "responda em outro lugar"; ele
+pode vir com `error`:
+
+| `error` | |
+|---|---|
+| (nenhum) | alguém tocou em **Terminal** |
+| `venceu` | passou o `ttl_s` sem resposta |
+| `fila cheia` | já tinha 4 pedidos |
+| `fontes demais` | o pedido veio de uma 5ª fonte |
+| `falta o title` | o pedido não tinha `title` |
+
+A placa lembra as últimas 16 respostas, inclusive as que vieram de um toque em
+**Terminal** e as vencidas: se o mesmo `id` chegar de novo, ela repete a resposta em vez de
+perguntar outra vez. As três últimas recusas da tabela ficam fora dessa lista, e o mesmo
+`id` pode tentar de novo depois.
+
+Para testar sem fonte, pela serial: `X<fonte> <json>` finge uma mensagem em
+`ext/<fonte>`, e `Y`/`N` aprovam ou negam o pedido que está na tela.
+
+### Policy da fonte
+
+Com `${iot:Connection.Thing.ThingName}` no lugar do nome da fonte:
+
+- `iot:Connect` só como `client/<fonte>`;
+- `iot:Publish` só em `<p>/<dev>/ext/<fonte>`;
+- `iot:Subscribe` e `iot:Receive` só em `<p>/<dev>/ext/<fonte>/re` e `<p>/<dev>/state`.
+
+A fonte não publica em `cmd` nem lê `evt`, `transcript` ou `reply`. Ela também não
+consegue se passar por outra fonte: o tópico sai do certificado. O portal não lê `ext`,
+porque os pedidos podem ter comandos e caminhos de arquivo. Ele só vê o `state.ext`.
 
 ## O harness
 
@@ -381,13 +531,20 @@ catálogo.
 ## Segurança
 
 - O microfone só liga pelo botão REC na placa. O harness pode desligar, nunca ligar.
-- A placa publica só na própria pasta (`<p>/<dev>/`) e só assina `cmd`, pela variável
-  `${iot:Connection.Thing.ThingName}` na policy.
+- A placa publica só na própria pasta (`<p>/<dev>/`) e só assina `cmd` e `ext/+`, pela
+  variável `${iot:Connection.Thing.ThingName}` na policy.
+- Aprovar um pedido de uma fonte externa só vale pelo toque na placa. O portal e o
+  harness não aprovam nada, e cada fonte só publica na própria pasta de `ext`.
 - Com o REC ligado, o áudio vai direto da placa para o Amazon Transcribe. As
   credenciais são temporárias e vêm do certificado, por um role alias que só abre
   streams do Transcribe.
-- A tela separada tem credenciais do Cognito sem login, que só leem os tópicos daquela
-  placa.
+- O portal exige login (usuário e senha no Cognito). O navegador recebe credenciais
+  temporárias que só leem os tópicos daquela placa, e a policy do IoT é anexada pela API,
+  não pelo navegador.
+- Os comandos do portal passam pela API, que confere o token e só aceita os da tela da
+  placa: `oba.activate`, `oba.remove`, `play`, `state` e `rec` com `on: false`. Instalar vai
+  pelo instalador do portal, com os mesmos passos da CLI. Os pedaços do `oba.install`
+  passam pelo `cmd`, que o navegador também lê.
 - Comandos com limites na placa: vibrar até 2 s, LEDs até 60 s, olhar até 5 s,
   8 regras, e balão de até 280 caracteres com PNG de até 12 KB.
 - Instalar um Oba pelo ar sempre pede o toque em "Instalar" na tela da placa, e a placa

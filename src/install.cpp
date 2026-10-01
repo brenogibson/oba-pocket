@@ -6,10 +6,12 @@
 #include "bubble.h"
 #include "bubble_fonts.h"
 #include "cloud.h"
+#include "ext.h"
 #include "oba.h"
 #include "protocol.h"
 #include "sdcard.h"
 #include "ui.h"
+#include "vibration.h"
 
 static constexpr size_t SPACE_MARGIN = 64 * 1024;   // folga no cartão além do total
 static constexpr uint32_t BUBBLE_WAIT_MS = 15000;   // a pergunta espera o balão fechar até isso
@@ -305,6 +307,7 @@ static bool swapDirs() {
 }
 
 static bool finish(M5Canvas& c) {
+  vibrationStop();  // a conferência e a pergunta seguram o loop, que é quem anda com a vibração
   String err;
   ObaSpec* spec = obaLoadDir(tmpDir(target), target, err);
   if (spec && !sameFiles(*spec, err)) {
@@ -327,7 +330,6 @@ static bool finish(M5Canvas& c) {
   replyInstall(cmdId, true, "confirm");
   Serial.printf("[install] %s: %s %s conferido, perguntando na tela\n", cmdId.c_str(), target.c_str(),
                 spec->version.c_str());
-  M5.Power.setVibration(0);  // a pergunta segura o loop, que é quem desliga a vibração
   if (!uiConfirm(c, title.c_str(), body.c_str(), "Instalar", "Recusar", INSTALL_ASK_MS)) {
     delete spec;
     fail("recusado na placa");
@@ -399,8 +401,10 @@ bool installUpdate(M5Canvas& c, uint32_t now) {
     return false;
   }
   // Conferindo: antes de segurar o loop, um quadro com "Conferindo…" na tela
-  // e o balão fechado (ou já esperou demais por ele)
-  if (!checkingShown || (!bubbleIdle() && now - checkingSince < BUBBLE_WAIT_MS)) return false;
+  // e o balão fechado (ou já esperou demais por ele). Com um pedido de aprovação
+  // na tela, espera sempre: a pergunta abriria por cima e o Instalar cairia
+  // onde estava o Aprovar
+  if (!checkingShown || extShowing() || (!bubbleIdle() && now - checkingSince < BUBBLE_WAIT_MS)) return false;
   blocked = true;
   return finish(c);
 }

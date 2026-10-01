@@ -6,17 +6,24 @@
 #include <ArduinoJson.h>
 #include "oba.h"
 
-static constexpr const char* FW_VERSION = "0.3.0";
+static constexpr const char* FW_VERSION = "0.5.0";
 
 // Ouve os eventos do Oba (behavior.h) e publica o primeiro state
 void protoBegin();
 
-// Comandos do harness, state quando pedido ou quando algo mudou, fim da
+// Comandos do harness, state quando pedido ou quando algo mudou, passos da
 // vibração. Devolve true se um comando trocou o Oba ativo (o loop chama applyOba).
 bool protoUpdate(uint32_t now);
 
 // Os Obas instalados ou o ativo mudaram: lê a lista de novo e publica o state
 void protoObasChanged();
+// Algo que entra no state mudou (as fontes externas): publica de novo
+void protoStateChanged();
+
+// Efeitos que o agente e as fontes externas pedem: react, vibrate, leds e play.
+// false = não é um desses; err diz por que um deles não rodou.
+bool protoEffect(const JsonDocument& cmd, uint32_t now, String& err);
+void protoVibrate(uint32_t ms, int level, uint32_t now);
 
 // Botões virtuais da esquerda e da direita ('a' e 'c')
 void protoButton(char which, uint32_t now);

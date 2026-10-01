@@ -14,7 +14,8 @@ registro S3, que o roteador usa. O publish só sobe para o registro.
 
 Usa o perfil padrão da AWS CLI (ou AWS_PROFILE), boto3 e paho-mqtt 2.x. O MQTT vai
 por WebSocket (443) com uma URL assinada (SigV4). A policy IAM mínima está em
-docs/protocol.md.
+docs/protocol.md. O instalador do portal (portal/api/installer.py) usa o mesmo Link,
+send_install e registro: os erros saem como ObaError, e só a CLI transforma em saída.
 """
 import base64
 import datetime
@@ -59,9 +60,16 @@ def hide(text) -> str:
     return re.sub(r"(X-Amz-[A-Za-z-]+=)[^&\s'\"]+", r"\1…", text)
 
 
+class ObaError(Exception):
+    """Erro com uma mensagem para gente (sem a conta nem o bucket) e o código de saída da CLI."""
+
+    def __init__(self, msg, code: int = 1):
+        super().__init__(hide(msg))
+        self.code = code
+
+
 def fail(msg, code: int = 1):
-    print(f"erro: {hide(msg)}", file=sys.stderr)
-    sys.exit(code)
+    raise ObaError(msg, code)
 
 
 def sha256(data: bytes) -> str:
@@ -130,11 +138,11 @@ def checked(target: str) -> tuple[Path, dict, list[tuple[str, bytes]]]:
 class Aws:
     """Sessão da AWS do config.json. O nome do bucket tem o ID da conta: nunca aparece na saída."""
 
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, endpoint: str | None = None):
         import boto3
         self.cfg = cfg
         self.session = boto3.Session(region_name=cfg["region"])
-        self._account = self._endpoint = None
+        self._account, self._endpoint = None, endpoint
 
     @property
     def account(self) -> str:
@@ -192,9 +200,10 @@ def sign_url(host: str, region: str, access_key: str, secret_key: str, token: st
 
 
 class Link:
-    """MQTT com a placa: assina <p>/<dev>/reply (e os canais extras) e publica em <p>/<dev>/cmd."""
+    """MQTT com a placa: assina <p>/<dev>/reply (e os canais extras) e publica em <p>/<dev>/cmd.
+    O client ID começa por client_prefix (a policy IAM de quem conecta limita por ele)."""
 
-    def __init__(self, aws: Aws, channels=("reply",)):
+    def __init__(self, aws: Aws, channels=("reply",), client_prefix: str = "oba-cli-"):
         import paho.mqtt.client as mqtt
         from botocore.httpsession import get_cert_path
         cfg = aws.cfg
@@ -205,7 +214,7 @@ class Link:
         self.error = None
         c = aws.credentials()
         url = sign_url(aws.endpoint, cfg["region"], c.access_key, c.secret_key, c.token)
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=new_id("oba-cli-"),
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=new_id(client_prefix),
                                   transport="websockets", protocol=mqtt.MQTTv311)
         self.client.ws_set_options(path=url[url.index("/mqtt"):])
         self.client.tls_set(ca_certs=get_cert_path(True))
@@ -243,9 +252,9 @@ class Link:
             m["_ch"] = msg.topic[len(self.base):]
             self.inbox.put(m)
 
-    def send(self, msg: dict, wait: bool = False):
+    def send(self, msg: dict, wait: bool = False, channel: str = "cmd"):
         body = json.dumps({"v": 1, "ts": now_ms(), **msg}, separators=(",", ":"), ensure_ascii=False)
-        info = self.client.publish(self.base + "cmd", body, qos=1)
+        info = self.client.publish(self.base + channel, body, qos=1)
         if wait:
             try:
                 info.wait_for_publish(REPLY_S)
@@ -375,11 +384,16 @@ class Upload:
 
 
 class Progress:
+    """O andamento de uma instalação no terminal. O instalador do portal tem um com os mesmos
+    métodos, que publica em ui/install."""
+
     def __init__(self, label: str, total: int):
         self.label, self.total, self.step = label, max(total, 1), -1
-        self.tty = sys.stdout.isatty()
+        self.tty, self.asked = sys.stdout.isatty(), False
 
     def show(self, done: int):
+        if self.asked:  # send_install segue chamando enquanto espera o toque na placa
+            return
         pct = min(100, done * 100 // self.total)
         step = pct if self.tty else pct // 25
         if step == self.step:
@@ -388,14 +402,23 @@ class Progress:
         text = f"  {self.label}: {pct}% ({done // 1024} de {self.total // 1024} KB)"
         print("\r" + text if self.tty else text, end="" if self.tty else "\n", flush=True)
 
+    def confirm(self):
+        self.show(self.total)
+        self.end()
+        self.asked = True
+        print(f"  confirme na placa: toque em \"Instalar\" (até {ASK_S} s)", flush=True)
+
     def end(self):
         if self.tty and self.step >= 0:
             print()
+        self.step = -1
 
 
-def send_install(link: Link, spec: dict, files: list[tuple[str, bytes]], activate: bool) -> dict:
-    """Manda o Oba para a placa. Devolve o reply final (stage "done"); recusa ou erro: sai."""
-    cid, name = new_id("i"), spec.get("name") or spec["id"]
+def send_install(link: Link, spec: dict, files: list[tuple[str, bytes]], activate: bool,
+                 cid: str | None = None, progress=None) -> dict:
+    """Manda o Oba para a placa. Devolve o reply final (stage "done"); recusa ou erro: ObaError.
+    progress tem show(bytes confirmados), confirm() e end() (padrão: a barra do terminal)."""
+    cid, name = cid or new_id("i"), spec.get("name") or spec["id"]
     header = install_header(cid, spec["id"], files, activate)
     if len(json.dumps(header)) > CMD_MAX:
         fail("a lista de arquivos não cabe num comando (caminhos muito longos?)")
@@ -406,7 +429,8 @@ def send_install(link: Link, spec: dict, files: list[tuple[str, bytes]], activat
     if not r.get("ok"):
         fail(f"a placa recusou: {r.get('error') or 'sem motivo'}")
     now = time.monotonic()
-    up, bar = Upload(cid, files, now), Progress(f"enviando {name}", sum(len(d) for _, d in files))
+    up = Upload(cid, files, now)
+    bar = progress or Progress(f"enviando {name}", up.total)
     up.resume(r.get("next"), now)
     deadline, confirm = None, False
     while True:
@@ -439,9 +463,7 @@ def send_install(link: Link, spec: dict, files: list[tuple[str, bytes]], activat
                 up.acked = up.sent = up.total
             if m.get("stage") == "confirm" and not confirm:
                 confirm = True
-                bar.show(up.acked)
-                bar.end()
-                print(f"  confirme na placa: toque em \"Instalar\" (até {ASK_S} s)", flush=True)
+                bar.confirm()
             if m.get("stage") == "done":
                 bar.end()
                 return m
@@ -474,6 +496,42 @@ def registry_sync(s3, bucket: str, folder: Path, spec: dict, owner: str | None =
             s3.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": prefix + k} for k in out["deleted"][i:i + 1000]],
                                                      "Quiet": True}, **kw)
     return out
+
+
+def registry_load(s3, bucket: str, oba_id: str, owner: str | None = None) -> tuple[dict, list[tuple[str, bytes]]]:
+    """O Oba do registro como oba_files() devolve de uma pasta: os arquivos de "files" na ordem
+    do JSON e o oba.json por último. Arquivo faltando ou com outro sha256: ObaError."""
+    import oba
+    from botocore.exceptions import ClientError
+    prefix, kw = f"obas/{oba_id}/", ({"ExpectedBucketOwner": owner} if owner else {})
+
+    def get(rel: str) -> bytes:
+        try:
+            return s3.get_object(Bucket=bucket, Key=prefix + rel, **kw)["Body"].read()
+        except ClientError as e:  # sem ListBucket, objeto que não existe vem como AccessDenied
+            if e.response["Error"]["Code"] in ("NoSuchKey", "AccessDenied", "404", "403"):
+                fail(f"{oba_id}/{rel} não está no registro")
+            raise
+
+    raw = get("oba.json")
+    try:
+        spec = oba.loads(raw)
+    except ValueError:
+        fail(f"{oba_id}/oba.json do registro não é JSON")
+    if not isinstance(spec, dict) or spec.get("id") != oba_id:
+        fail(f"{oba_id}/oba.json do registro tem outro id")
+    if not isinstance(spec.get("files", {}), dict):
+        fail(f"{oba_id}/oba.json do registro: files precisa ser um objeto")
+    files = []
+    for rel, sha in (spec.get("files") or {}).items():
+        if not oba.valid_path(rel) or rel == "oba.json":
+            fail(f"{oba_id}/oba.json do registro: caminho inválido em files ({rel[:64]})")
+        data = get(rel)
+        if not isinstance(sha, str) or sha256(data) != sha.lower():
+            fail(f"{oba_id}/{rel}: o sha256 no registro não bate com o oba.json")
+        files.append((rel, data))
+    files.append(("oba.json", raw))
+    return spec, files
 
 
 def registry_remove(s3, bucket: str, oba_id: str, owner: str | None = None) -> int:
@@ -646,15 +704,21 @@ def volume(v: str) -> int:
 
 
 def guarded(fn):
-    """Erros da AWS e da rede viram uma linha legível, sem a conta nem o bucket."""
+    """Erros (os nossos, da AWS e da rede) viram uma linha legível, sem a conta nem o bucket."""
     def run(a):
         from botocore.exceptions import BotoCoreError, ClientError
         try:
             fn(a)
         except KeyboardInterrupt:
-            fail("interrompido", 130)
-        except (ClientError, BotoCoreError, OSError) as e:
-            fail(e)
+            e = ObaError("interrompido", 130)
+        except (ClientError, BotoCoreError, OSError) as x:
+            e = ObaError(x)
+        except ObaError as x:
+            e = x
+        else:
+            return
+        print(f"erro: {e}", file=sys.stderr)
+        sys.exit(e.code)
     return run
 
 

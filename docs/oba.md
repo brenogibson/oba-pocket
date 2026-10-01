@@ -97,7 +97,7 @@ para o `outline`.
 
 | Campo | |
 |---|---|
-| `palette` | obrigatórias `bg`, `shadow`, `star`, `text`, `bubble` e `ink`. `rec`, `wait` e `off` são opcionais como no rig. `body`, `outline`, `eye` e `blush` também são opcionais: a placa não usa, mas a tela separada usa (sem elas, `ink` e `star`) |
+| `palette` | obrigatórias `bg`, `shadow`, `star`, `text`, `bubble` e `ink`. `rec`, `wait` e `off` são opcionais como no rig. `body`, `outline`, `eye` e `blush` também são opcionais: a placa não usa, mas o portal usa (sem elas, `ink` e `star`) |
 | `size` | `[w, h]` de um quadro, em pixels do PNG, de 8 a 96 cada |
 | `origin` | o ponto do quadro que fica no centro do Oba (de onde saem a sombra e as âncoras). Pode ser fracionário, de 0 a `w` e de 0 a `h` |
 | `scale` | inteiro de 1 a 8: cada pixel do PNG vira `scale`×`scale` na tela. `w`·`scale` até 240 e `h`·`scale` até 200 |
@@ -130,7 +130,9 @@ entrelaçamento e sem alpha parcial.
 
 ## Humores (`moods`)
 
-Os humores são fixos: `idle`, `happy`, `scared`, `shy`, `dizzy` e `sleepy`. Cada Oba
+Os humores são fixos: `idle`, `happy`, `scared`, `shy`, `dizzy`, `sleepy`, `busy` e
+`alert`. Os dois últimos só aparecem com uma [fonte externa](protocol.md#fontes-externas-ext)
+(ocupada, ou pedindo aprovação). Os reflexos e o agente não mandam neles. Cada Oba
 só diz o que muda no jeito dele de se mexer:
 
 ```json
@@ -180,6 +182,17 @@ evento no humor atual ganha. Sem `reflexes`, vale a tabela padrão:
   ou `none`.
 - `from` / `except`: em que humores o reflexo vale. Use um ou outro, nunca os dois.
 - `sound`: o nome de um som de `sounds` para tocar junto (abaixo).
+- `vibrate`: vibra junto. `{"ms": 150}` vibra uma vez; `{"ms": [80, 80, 80, 80, 250]}`
+  é um padrão que liga, desliga, liga… Até 8 passos, cada um de 20 a 2000 ms, e até
+  2000 ms somando tudo. A placa troca de passo a cada quadro (uns 50 ms), então pausas
+  curtas demais somem. `level` é a força, de 1 a 255 (padrão 200); no Core2 o motor só
+  gira de uns 110 para cima. Um Oba com `vibrate` precisa pedir `"vibration"` em
+  `requires`. Enquanto o motor vibra, e um instante depois, a placa não conta o tremor
+  como teco, chacoalhão ou barulho.
+
+```json
+{"on": "touch.tap", "do": "happy", "vibrate": {"ms": [80, 80, 80, 80, 250], "level": 255}}
+```
 
 ## Sons (`sounds`)
 
@@ -235,7 +248,7 @@ O que o Oba usa da placa: `display`, `touch`, `buttons`, `imu`, `mic.level`,
 `mic.transcribe`, `speaker`, `leds`, `vibration`, `battery` e `sd`. Na instalação pelo
 ar, a placa mostra essa lista em português ("Pede: tela, toque, movimento,
 alto-falante…") e só instala se você aceitar. Um Oba com `sounds` precisa pedir
-`speaker`.
+`speaker`, e um com `vibrate` nos reflexos precisa pedir `vibration`.
 
 ## O cérebro (`agent`)
 
@@ -273,7 +286,7 @@ nas listas do harness, e o roteador ignora o que não estiver.
 | Nome | `run` | O que faz |
 |---|---|---|
 | `meeting` | `think` | acompanha a conversa. Solta dicas em balões (texto, ícone de serviço ou QR de um link) e guarda "cartas na manga": regras que disparam quando alguém volta a um assunto |
-| | `summary` | no fim da reunião, publica o resumo na tela separada (`ui/summary`) e avisa num balão |
+| | `summary` | no fim da reunião, publica o resumo no portal (`ui/summary`) e avisa num balão |
 
 Sem habilidade para o `run`, o agente genérico responde com a persona e escolhe as
 ações por conta própria (falar, reagir, olhar, vibrar, LEDs, armar regras e ler
