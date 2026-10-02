@@ -67,7 +67,9 @@ CARD_TEXT_MAX = 600
 CMD_MAX = 14_000         # o buffer MQTT da placa é de 16 KB
 UI_MAX = 64_000
 SHEET_MAX = 48 * 1024    # folha idle que vai em base64 no ui/oba
-UI_OBA_FORMAT = 2        # mudou o que vai no ui/oba: sai de novo para todas as placas
+OUTLINE_MAX = 256        # pontos do rig (OBA_OUTLINE_MAX em src/oba.h)
+UI_OBA_FORMAT = 3        # mudou o que vai no ui/oba: sai de novo para todas as placas
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")  # agente http sem TLS só na própria máquina
 
 # O que o agente pode pedir (docs/protocol.md). reset e oba.* ficam com o roteador e a placa.
 AGENT_TYPES = {"speak", "arm", "disarm", "react", "look", "vibrate", "leds", "play", "read", "rec", "state", "ui"}
@@ -146,8 +148,11 @@ def ui(dev: str, channel: str, data: dict, retain: bool = False):
 def valid_url(url) -> str | None:
     if not isinstance(url, str) or len(url) > URL_MAX:
         return None
-    u = urlparse(url)
-    host = (u.hostname or "").lower()
+    try:
+        u = urlparse(url)
+        host = (u.hostname or "").lower()
+    except ValueError:  # IPv6 malformado ("https://[x"): sem isso, a rodada inteira cai
+        return None
     if u.scheme != "https" or not any(host == h or host.endswith("." + h) for h in URL_HOSTS):
         return None
     return url
@@ -459,10 +464,24 @@ def run_trigger(dev: str, spec: dict, n: int, trig: dict, sid: str, mark: int, c
 
 # ------------------------------------------------------------------ agente
 
+def agent_url_ok(url) -> bool:
+    """A transcrição vai no corpo: https, ou http só na própria máquina (como no setup.py)."""
+    if not isinstance(url, str):
+        return False
+    try:
+        u = urlparse(url)
+        host = u.hostname
+    except ValueError:
+        return False
+    return bool(host) and (u.scheme == "https" or (u.scheme == "http" and host in LOCAL_HOSTS))
+
+
 def invoke(target: dict, dev: str, sid: str, req: dict) -> dict:
     body = json.dumps(req, ensure_ascii=False).encode()
     started = time.time()
     if target.get("type") == "http":
+        if not agent_url_ok(target.get("url")):
+            raise ValueError("url do agente recusada: precisa ser https (http só em localhost, 127.0.0.1 ou ::1)")
         r = urllib.request.urlopen(urllib.request.Request(
             target["url"], data=body, headers={"Content-Type": "application/json"}), timeout=AGENT_TIMEOUT_S)
         out = json.loads(r.read())
@@ -746,23 +765,47 @@ def sheet_b64(spec: dict, rel) -> str | None:
     return base64.b64encode(data).decode()
 
 
+def numbers(v, n: int) -> bool:
+    return (isinstance(v, list) and len(v) == n
+            and all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in v))
+
+
+def look_of(spec: dict) -> dict:
+    """O desenho do Oba só com valores que a tela entende (o portal monta o SVG do rig com
+    eles), como o look() do portal/api/api.py."""
+    lk = spec.get("look") if isinstance(spec.get("look"), dict) else {}
+    pal = lk.get("palette") if isinstance(lk.get("palette"), dict) else {}
+    out = {"palette": {k: v for k, v in pal.items() if isinstance(v, str) and COLOR_RE.fullmatch(v)}}
+    if lk.get("type") == "sprites":
+        frames = lk.get("frames") if isinstance(lk.get("frames"), dict) else {}
+        idle = frames.get("idle") if isinstance(frames.get("idle"), dict) else {}
+        sp = {k: lk[k] for k in ("size", "origin") if numbers(lk.get(k), 2)}
+        if numbers([lk.get("scale")], 1):
+            sp["scale"] = lk["scale"]
+        fps = idle.get("fps")
+        sp["fps"] = fps if isinstance(fps, int) and not isinstance(fps, bool) else 6
+        if sheet := sheet_b64(spec, idle.get("sheet")):
+            sp["sheet"] = sheet
+        out["sprites"] = sp
+    else:
+        eyes = lk.get("eyes") if isinstance(lk.get("eyes"), dict) else {}
+        pts = lk.get("outline")
+        if isinstance(pts, list) and 3 <= len(pts) <= OUTLINE_MAX and all(numbers(q, 2) for q in pts):
+            out["outline"] = pts
+        out["eyes"] = {k: v for k, v in eyes.items()
+                       if k in ("left", "right", "y", "rx", "ry") and numbers([v], 1)}
+    return out
+
+
 def publish_oba(dev: str, active: dict, spec: dict | None):
     """ui/oba (retido): o Oba ativo para as telas desenharem."""
     spec = spec or {}
     data = {k: active.get(k) for k in ("id", "name", "version")}
-    look = spec.get("look") or {}
-    if look.get("type") == "sprites":
-        idle = (look.get("frames") or {}).get("idle") or {}
-        sprites = {k: look[k] for k in ("size", "origin", "scale") if k in look}
-        sprites["fps"] = idle.get("fps", 6)
-        if sheet := sheet_b64(spec, idle.get("sheet")):
-            sprites["sheet"] = sheet
-        data.update({k: look[k] for k in ("palette",) if k in look})
-        data["sprites"] = sprites
-    else:
-        data.update({k: look[k] for k in ("palette", "outline", "eyes") if k in look})
-    data["wake_words"] = spec.get("wake_words", [])
-    data["sounds"] = sorted(spec.get("sounds") or {})  # o portal oferece tocar
+    data.update(look_of(spec))
+    words = spec.get("wake_words") if isinstance(spec.get("wake_words"), list) else []
+    data["wake_words"] = [w for w in words if isinstance(w, str)][:16]
+    sounds = spec.get("sounds") if isinstance(spec.get("sounds"), dict) else {}
+    data["sounds"] = sorted(s for s in sounds if SOUND_RE.fullmatch(s))  # o portal oferece tocar
     ui(dev, "oba", data, retain=True)
 
 

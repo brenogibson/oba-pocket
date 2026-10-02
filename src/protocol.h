@@ -6,7 +6,7 @@
 #include <ArduinoJson.h>
 #include "oba.h"
 
-static constexpr const char* FW_VERSION = "0.5.0";
+static constexpr const char* FW_VERSION = "0.5.1";
 
 // Ouve os eventos do Oba (behavior.h) e publica o primeiro state
 void protoBegin();

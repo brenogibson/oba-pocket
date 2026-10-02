@@ -11,3 +11,8 @@ src/secrets.h.bak
 .DS_Store
 shots/
 imported-img/
+display/
+.vscode/
+*.pem
+*.key
+.env

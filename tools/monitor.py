@@ -3,9 +3,10 @@
   python3 tools/monitor.py [pasta] [porta]   (sem porta: acha a placa no USB)
 
 Mostra o log da placa; digite "s" + Enter para salvar um print (PNG) em
-pasta/ (padrão: shots/), "r" para ligar/desligar a gravação e "t <frase>"
-para simular que alguém falou a frase (dispara as cartas da manga), "c" para
-tentar o cartão SD de novo. O firmware responde a 'S' mandando o frame em base64.
+pasta/ (padrão: shots/) e "c" para tentar o cartão SD de novo. O firmware
+responde a 'S' mandando o frame em base64. "r" liga/desliga a gravação e
+"t <frase>" simula que alguém falou a frase (dispara as cartas da manga), mas
+esses dois só valem no firmware dev (pio run -e dev -t upload).
 "p <nome> <humor> <ms> <olharX> <olharY> <lado> [extra]" desenha um quadro
 fixo e salva como pasta/<nome>.png; "h ..." só mostra o CRC32 dele (ver
 freezeShot em src/main.cpp).
@@ -142,7 +143,7 @@ for cmd in sys.stdin:
     cmd = cmd.strip()
     if cmd.lower() in ("s", "r", "c", "l", "o", "y", "n", "f"):
         s.write(cmd.upper().encode())
-    elif cmd.lower().startswith("t "):  # "t alguém falou de fila" simula a fala
+    elif cmd.lower().startswith("t "):  # "t alguém falou de fila" simula a fala (firmware dev)
         s.write(b"T" + cmd[2:].encode() + b"\n")
     elif cmd[:2].lower() in ("p ", "h "):  # quadro fixo: "p idle idle 20000 0 0 1"
         s.write(cmd[0].upper().encode() + cmd[2:].encode() + b"\n")

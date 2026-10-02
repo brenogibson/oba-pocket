@@ -12,6 +12,10 @@
 #include <mbedtls/base64.h>
 #include "audio.h"
 #include "transcribe.h"
+// Os dois ficam fora do git: sem eles, um erro que diz o que fazer
+#if !__has_include("secrets.h")
+#error "falta src/secrets.h: copie src/secrets.h.example para src/secrets.h, preencha o WiFi e rode python3 setup.py (ele gera o certificado e o src/aws_config.h)"
+#endif
 #if !__has_include("aws_config.h")
 #error "falta src/aws_config.h: rode python3 setup.py (ele gera o arquivo a partir do config.json)"
 #endif

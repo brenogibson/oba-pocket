@@ -1,4 +1,7 @@
 #include "transcribe.h"
+#if !__has_include("aws_config.h")
+#error "falta src/aws_config.h: rode python3 setup.py (ele gera o arquivo a partir do config.json)"
+#endif
 #include "aws_config.h"
 #include <mbedtls/md.h>
 #include <rom/crc.h>

@@ -224,7 +224,8 @@ IoT Core da sua conta. Não depende de nenhum serviço do claude.ai, nem de logi
   segurada. Os espaços em série viram um só, para nenhum trecho do comando ficar fora
   da tela.
 - **Aprovar só na placa.** A ponte não aprova nada sozinha. Sem resposta da placa, ela
-  não imprime nada, e quem decide é o terminal.
+  não imprime nada, e quem decide é o terminal. Pela serial, só o firmware dev aprova
+  (`Y`/`N`, com `pio run -e dev -t upload`).
 - **Tudo local fica fechado.** `~/.oba-ponte/` é `0700`, e a chave, o socket e o log
   são `0600`. O log só tem tipos de evento, ids e erros: nunca o `tool_input`, o
   transcript, comandos ou caminhos. Do transcript, a ponte lê os blocos `tool_use` (id,
@@ -246,6 +247,12 @@ claude plugin marketplace remove oba-pocket
 
 Na AWS, revogue e apague o certificado da fonte e a thing dela. Sem o certificado, a
 máquina não conecta mais, mesmo que tenha ficado alguma cópia da chave.
+
+Perdeu a máquina, ou a chave vazou? Rode `python3 setup.py --ponte <nome> --new-cert`.
+Ele cria um certificado novo em `build/ponte-<nome>/` e desativa os anteriores daquela
+ponte, que saem da thing. Para continuar usando a ponte, copie a pasta nova para a
+máquina e instale de novo, como no passo 2:
+`python3 ponte/install.py build/ponte-<nome>/ --check`.
 
 ## Limites
 

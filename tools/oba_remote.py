@@ -21,6 +21,7 @@ import base64
 import datetime
 import hashlib
 import hmac
+import importlib
 import json
 import queue
 import re
@@ -43,6 +44,7 @@ ASK_S = 60               # a placa espera o toque em "Instalar" por isso
 PLAY_S = 3
 CONNECT_S = 15
 CMD_MAX = 14_000         # o buffer MQTT da placa é de 16 KB
+INSTALL_FW = "0.3.0"     # primeiro firmware com oba.install e oba.chunk
 ID_RE = re.compile(r"[a-z0-9_-]{1,31}")
 CONTENT_TYPES = {".json": "application/json", ".png": "image/png", ".wav": "audio/wav",
                  ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8"}
@@ -70,6 +72,14 @@ class ObaError(Exception):
 
 def fail(msg, code: int = 1):
     raise ObaError(msg, code)
+
+
+def need(module: str, pip: str):
+    """Importa uma dependência de fora; sem ela, ObaError dizendo o que instalar."""
+    try:
+        return importlib.import_module(module)
+    except ImportError:
+        fail(f"falta o {pip}: pip install {pip} (veja o README)")
 
 
 def sha256(data: bytes) -> str:
@@ -139,7 +149,7 @@ class Aws:
     """Sessão da AWS do config.json. O nome do bucket tem o ID da conta: nunca aparece na saída."""
 
     def __init__(self, cfg: dict, endpoint: str | None = None):
-        import boto3
+        boto3 = need("boto3", "boto3")
         self.cfg = cfg
         self.session = boto3.Session(region_name=cfg["region"])
         self._account, self._endpoint = None, endpoint
@@ -204,7 +214,7 @@ class Link:
     O client ID começa por client_prefix (a policy IAM de quem conecta limita por ele)."""
 
     def __init__(self, aws: Aws, channels=("reply",), client_prefix: str = "oba-cli-"):
-        import paho.mqtt.client as mqtt
+        mqtt = need("paho.mqtt.client", "paho-mqtt")
         from botocore.httpsession import get_cert_path
         cfg = aws.cfg
         self.base = f"{cfg['prefix']}/{cfg['device']}/"
@@ -425,7 +435,8 @@ def send_install(link: Link, spec: dict, files: list[tuple[str, bytes]], activat
     link.send(header)
     r = link.reply(cid, REPLY_S)
     if r is None:
-        fail("a placa não respondeu ao oba.install (ela está ligada, conectada e com o firmware 0.3.0?)")
+        fail("a placa não respondeu ao oba.install (ela está ligada, conectada e com o firmware "
+             f"{INSTALL_FW} ou mais novo?)")
     if not r.get("ok"):
         fail(f"a placa recusou: {r.get('error') or 'sem motivo'}")
     now = time.monotonic()
@@ -704,8 +715,14 @@ def volume(v: str) -> int:
 
 
 def guarded(fn):
-    """Erros (os nossos, da AWS e da rede) viram uma linha legível, sem a conta nem o bucket."""
+    """Erros (os nossos, da AWS e da rede) viram uma linha legível, sem a conta nem o bucket.
+    Sem boto3 ou paho-mqtt (o README instala os dois), sai antes de ler o config.json."""
     def run(a):
+        try:
+            need("boto3", "boto3")
+            need("paho.mqtt.client", "paho-mqtt")
+        except ObaError as e:
+            sys.exit(f"erro: {e}")
         from botocore.exceptions import BotoCoreError, ClientError
         try:
             fn(a)

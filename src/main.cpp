@@ -28,14 +28,16 @@
 // Obas novos chegam pelo ar (oba.install, install.h): a placa grava no cartão,
 // confere e pergunta na tela antes de instalar.
 //
-// Pela serial: 'S' tira print, 'R' liga o REC, 'T<frase>' simula fala, 'P'/'H'
-// desenham um quadro fixo para comparar prints (ver freezeShot), 'U' grava um
-// arquivo de Oba no cartão, 'A<id>' ativa um Oba, 'L' lista os instalados, 'O'
-// abre a tela de escolha (e fecha, se já estiver nela), 'E<evento>' finge um
-// evento da placa (touch.tap, button.a...), 'C' tenta o cartão de novo, 'F'
-// mostra o tempo de quadro desde o último 'F', 'X<fonte> <json>' finge uma
-// mensagem em ext/<fonte> e 'Y'/'N' respondem à pergunta da instalação (ou ao
-// pedido na tela).
+// Pela serial: 'S' tira print, 'P'/'H' desenham um quadro fixo para comparar
+// prints (ver freezeShot), 'U' grava um arquivo de Oba no cartão, 'A<id>' ativa
+// um Oba, 'L' lista os instalados, 'O' abre a tela de escolha (e fecha, se já
+// estiver nela), 'C' tenta o cartão de novo e 'F' mostra o tempo de quadro desde
+// o último 'F'. Os que se passam pelo dono ou pelo microfone só existem no
+// firmware dev (pio run -e dev, que liga o OBA_SERIAL_DEBUG): 'R' liga/desliga o
+// REC, 'T<frase>' simula fala, 'E<evento>' finge um evento da placa (touch.tap,
+// button.a...), 'X<fonte> <json>' finge uma mensagem em ext/<fonte> e 'Y'/'N'
+// respondem ao pedido na tela (mesmo o perigoso, sem segurar o dedo). A pergunta
+// da instalação lê 'Y'/'N' por conta própria (uiConfirm), nos dois firmwares.
 
 #include <M5Unified.h>
 #include <math.h>
@@ -379,8 +381,7 @@ void loop() {
   bubbleUpdate(now);
   petUpdate(now, bubbleShowing() || extShowing());
   render(now, t);
-  // Serial para testes: 'S' tira print, 'R' liga/desliga a gravação,
-  // 'T<frase>' finge que alguém falou a frase (dispara cartas da manga)
+  // Serial para testes (lista no topo do arquivo)
   if (Serial.available()) {
     int c = Serial.read();
     frameSkip = true;  // os comandos de teste podem segurar o loop (print, upload...)
@@ -392,13 +393,15 @@ void loop() {
       applyOba();
     }
     if (c == 'F') frameStats();
-    if (c == 'R') cloudSetRecording(!cloudRecording());
-    if (c == 'T') cloudSimulateLine(Serial.readStringUntil('\n'));
     if (c == 'P' || c == 'H') freezeShot(Serial.readStringUntil('\n'), c == 'P');
     if (c == 'U') receiveFile(Serial.readStringUntil('\n'));
     if (c == 'A') activate(Serial.readStringUntil('\n'));
     if (c == 'L') listObas();
     if (c == 'O' && bubbleIdle() && !extAsking()) openPicker();  // como o botão do meio
+#ifdef OBA_SERIAL_DEBUG
+    // Só no firmware dev: fazem o papel do dono (toque) ou do microfone
+    if (c == 'R') cloudSetRecording(!cloudRecording());
+    if (c == 'T') cloudSimulateLine(Serial.readStringUntil('\n'));
     if (c == 'X') {
       String line = Serial.readStringUntil('\n');
       int sp = line.indexOf(' ');
@@ -410,6 +413,12 @@ void loop() {
       type.trim();
       protoSimulate(type, now);
     }
+#else
+    if (c == 'R' || c == 'T' || c == 'X' || c == 'E') {
+      if (c != 'R') Serial.readStringUntil('\n');  // a frase ou o JSON não viram comandos
+      Serial.println("[serial] só no firmware dev (pio run -e dev)");
+    }
+#endif
   }
   ledsShow(protoLeds(oba().mood(pet.mood).leds, now), now, t);
 

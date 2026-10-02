@@ -271,12 +271,12 @@ o Oba só tem os reflexos.
 
 | Campo | |
 |---|---|
-| `endpoint` | o nome de um agente no catálogo do harness (`agents` no `config.json`): um runtime do AgentCore (`{"type": "agentcore", "arn": "…"}`) ou uma URL que recebe o [contrato](protocol.md#contrato-roteador--agente) num POST (`{"type": "http", "url": "…"}`). `default` é o agente genérico |
+| `endpoint` | o nome de um agente no catálogo do harness (`agents` no `config.json`): um runtime do AgentCore (`{"type": "agentcore", "arn": "…"}`) ou uma URL que recebe o [contrato](protocol.md#contrato-roteador--agente) num POST (`{"type": "http", "url": "…"}`). O `http` vai sem autenticação e precisa de `https` fora do localhost: só para desenvolvimento. `default` é o agente genérico |
 | `persona` | quem o Oba é, em texto livre. É o começo de todo prompt dele |
 | `model` | um modelo da lista permitida do harness. Sem o campo, vale o primeiro da lista |
 | `abilities` | habilidades prontas do agente genérico (abaixo) |
 | `triggers` | quais eventos acordam o agente e como ([gatilhos](protocol.md#gatilhos-agenttriggers-no-json-do-oba)) |
-| `mcp` | ferramentas do catálogo do harness: `aws-knowledge` (documentação da AWS) e `demos` (se configurado) |
+| `mcp` | ferramentas do catálogo do harness: `aws-knowledge` (documentação da AWS) e `demos`, opcional: um servidor MCP seu com demos, que só entra se o `config.json` tiver a URL dele ([No agente](../README.md#subindo)) |
 
 Por segurança, o Oba só escolhe por nome. Endpoints, modelos e MCPs precisam estar
 nas listas do harness, e o roteador ignora o que não estiver.

@@ -1,4 +1,5 @@
-// Gerado por tools/make_font.py a partir da Nunito (SIL OFL 1.1). Não edite.
+// Gerado por tools/make_font.py. Não edite.
+// Fonte: Nunito, Copyright 2014 The Nunito Project Authors (https://github.com/googlefonts/nunito). SIL Open Font License 1.1: ver tools/fonts/Nunito-OFL.txt.
 #include "bubble_fonts.h"
 
 // 22 px, 44 KB

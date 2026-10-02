@@ -51,7 +51,9 @@ def c_array(name: str, data: bytes) -> str:
 def write(fonts: dict) -> None:
     """fonts = {nome: (px, bytes)}. Os dados ficam só no .cpp, para não haver
     uma cópia na flash por arquivo que usa as fontes."""
-    head = "// Gerado por tools/make_font.py a partir da Nunito (SIL OFL 1.1). Não edite.\n"
+    head = ("// Gerado por tools/make_font.py. Não edite.\n"
+            "// Fonte: Nunito, Copyright 2014 The Nunito Project Authors (https://github.com/googlefonts/nunito). "
+            "SIL Open Font License 1.1: ver tools/fonts/Nunito-OFL.txt.\n")
     h = [head, "// Fontes VLW (suavizadas) com ASCII + Latin-1, para M5GFX loadFont().\n"
          "#pragma once\n#include <stdint.h>\n\n"]
     cpp = [head, '#include "bubble_fonts.h"\n']

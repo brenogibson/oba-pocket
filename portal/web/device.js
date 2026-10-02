@@ -48,7 +48,8 @@ const MOODS = { idle: 'ociosa', busy: 'trabalhando', alert: 'esperando você' };
 function sources(ext) {
   return ext.map(e => {
     const name = String(e.src || '').replace(/^.*-ponte-/, '');
-    const asks = e.asks ? ` · ${e.asks} ${e.asks > 1 ? 'pedidos' : 'pedido'}` : '';
+    const n = Number(e.asks) | 0;   // contador da placa: no HTML só entra número
+    const asks = n > 0 ? ` · ${n} ${n > 1 ? 'pedidos' : 'pedido'}` : '';
     return `${esc(name)} <small>${esc(MOODS[e.mood] || e.mood || '')}${asks}</small>`;
   }).join('<br>');
 }

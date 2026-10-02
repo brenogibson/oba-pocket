@@ -53,7 +53,7 @@ Publicado quando a placa conecta, quando algo nele muda (Oba ativo, Obas instala
 REC, carregando ou não, bateria a cada 5%) e quando chega o comando `state`.
 
 ```json
-{"v": 1, "type": "state", "ts": 1790000000000, "oba": "bit", "online": true, "fw": "0.5.0",
+{"v": 1, "type": "state", "ts": 1790000000000, "oba": "bit", "online": true, "fw": "0.5.1",
  "active": {"id": "bit", "name": "Bit", "version": "1.0.0", "sha256": "<hex>"},
  "obas": [{"id": "nimbo", "name": "Nimbo", "version": "1.0.0", "builtin": true},
           {"id": "bit", "name": "Bit", "version": "1.0.0"}],
@@ -377,7 +377,7 @@ um pedido aparece.
 ### Placa → fonte: `ext/<fonte>/re`
 
 ```json
-{"v": 1, "type": "reply", "ts": 1790000000000, "oba": "claude-code", "re": "ask", "id": "k3v9x2",
+{"v": 1, "type": "reply", "ts": 1790000000000, "oba": "bit", "re": "ask", "id": "k3v9x2",
  "choice": "allow"}
 ```
 
@@ -398,7 +398,8 @@ perguntar outra vez. As três últimas recusas da tabela ficam fora dessa lista,
 `id` pode tentar de novo depois.
 
 Para testar sem fonte, pela serial: `X<fonte> <json>` finge uma mensagem em
-`ext/<fonte>`, e `Y`/`N` aprovam ou negam o pedido que está na tela.
+`ext/<fonte>`, e `Y`/`N` aprovam ou negam o pedido que está na tela. Esses comandos só
+valem no firmware dev (`pio run -e dev -t upload`).
 
 ### Policy da fonte
 
@@ -528,13 +529,19 @@ Qualquer agente que cumpra esse contrato pode ser o cérebro de um Oba. O
 (`agents` no `config.json`). O roteador não chama um endpoint que esteja fora do
 catálogo.
 
+Num endpoint `http`, o roteador manda o JSON num POST sem autenticação nenhuma. A URL
+precisa ser `https`; `http` só vale em `localhost`, `127.0.0.1` ou `::1`, e o `setup.py`
+e o roteador recusam o resto. Use só para desenvolvimento: quem tiver a URL chama o
+agente.
+
 ## Segurança
 
 - O microfone só liga pelo botão REC na placa. O harness pode desligar, nunca ligar.
 - A placa publica só na própria pasta (`<p>/<dev>/`) e só assina `cmd` e `ext/+`, pela
   variável `${iot:Connection.Thing.ThingName}` na policy.
 - Aprovar um pedido de uma fonte externa só vale pelo toque na placa. O portal e o
-  harness não aprovam nada, e cada fonte só publica na própria pasta de `ext`.
+  harness não aprovam nada, e cada fonte só publica na própria pasta de `ext`. Pela
+  serial, só o firmware dev aprova (`Y`/`N`).
 - Com o REC ligado, o áudio vai direto da placa para o Amazon Transcribe. As
   credenciais são temporárias e vêm do certificado, por um role alias que só abre
   streams do Transcribe.
@@ -544,7 +551,9 @@ catálogo.
 - Os comandos do portal passam pela API, que confere o token e só aceita os da tela da
   placa: `oba.activate`, `oba.remove`, `play`, `state` e `rec` com `on: false`. Instalar vai
   pelo instalador do portal, com os mesmos passos da CLI. Os pedaços do `oba.install`
-  passam pelo `cmd`, que o navegador também lê.
+  passam pelo `cmd`, que o navegador também lê. A API também envia Obas para o registro
+  (`POST /api/obas`, em zip) e tira de lá (`DELETE /api/obas/<id>`): quem entra no
+  portal mexe no registro.
 - Comandos com limites na placa: vibrar até 2 s, LEDs até 60 s, olhar até 5 s,
   8 regras, e balão de até 280 caracteres com PNG de até 12 KB.
 - Instalar um Oba pelo ar sempre pede o toque em "Instalar" na tela da placa, e a placa

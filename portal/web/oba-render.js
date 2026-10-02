@@ -7,14 +7,25 @@ export function shade(color, k) {
   return '#' + [16, 8, 0].map(s => Math.round(((n >> s) & 255) * k).toString(16).padStart(2, '0')).join('');
 }
 
+// O SVG do rig é montado em texto: só entra cor #rrggbb e número finito (o roteador e a
+// API já filtram; aqui é a última barreira antes do innerHTML)
+export const COLOR = /^#[0-9a-f]{6}$/i;
+const color = (c, d = '#000000') => typeof c === 'string' && COLOR.test(c) ? c : d;
+const point = q => Array.isArray(q) && q.length === 2 && q.every(Number.isFinite);
+
+// '' quando o Oba não tem rig que dê para desenhar
 export function obaSvg(o) {
-  const p = o.palette, e = o.eyes, pts = o.outline;
+  const p = o.palette || {}, e = o.eyes || {};
+  const pts = Array.isArray(o.outline) ? o.outline.filter(point) : [];
+  if (pts.length < 3) return '';
   const xs = pts.map(q => q[0]), ys = pts.map(q => q[1]);
   const x0 = Math.min(...xs), y0 = Math.min(...ys), w = Math.max(...xs) - x0, h = Math.max(...ys) - y0;
   const m = Math.max(w, h) * 0.06, side = Math.max(w, h) + 2 * m;
-  const eye = x => `<ellipse cx="${x}" cy="${e.y}" rx="${e.rx || 8}" ry="${e.ry || 12}" fill="${p.eye}"/>`;
+  const size = (v, d) => Number.isFinite(v) && v ? v : d;
+  const eye = x => Number.isFinite(x) && Number.isFinite(e.y)
+    ? `<ellipse cx="${x}" cy="${e.y}" rx="${size(e.rx, 8)}" ry="${size(e.ry, 12)}" fill="${color(p.eye)}"/>` : '';
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x0 + w / 2 - side / 2} ${y0 + h / 2 - side / 2} ${side} ${side}">` +
-    `<polygon points="${pts.map(q => q.join(',')).join(' ')}" fill="${p.body}"/>${eye(e.left)}${eye(e.right)}</svg>`;
+    `<polygon points="${pts.map(q => q.join(',')).join(' ')}" fill="${color(p.body)}"/>${eye(e.left)}${eye(e.right)}</svg>`;
 }
 
 // Anima a folha idle (tira horizontal de quadros, docs/oba.md) num canvas do tamanho
@@ -56,7 +67,8 @@ export function drawOba(el, o, box) {
     el.replaceChildren();
     return spriteCanvas(o, box, c => el.replaceChildren(c));
   }
-  if (o.outline && o.eyes && o.palette) el.innerHTML = obaSvg(o);
+  const svg = obaSvg(o);
+  if (svg) el.innerHTML = svg;
   else el.replaceChildren();                // folha grande demais ou Oba sem desenho: só a cor
   return () => {};
 }
@@ -64,6 +76,7 @@ export function drawOba(el, o, box) {
 // Favicon: o Oba sobre o fundo da paleta
 export function faviconFor(o, link) {
   const [w, h] = (o.sprites && o.sprites.size) || [];
+  const bg = color((o.palette || {}).bg);
   if (o.sprites && o.sprites.sheet && w > 0 && h > 0) {
     const img = new Image();
     img.onload = () => {
@@ -71,7 +84,7 @@ export function faviconFor(o, link) {
       const ic = document.createElement('canvas');
       ic.width = ic.height = 64;
       const x = ic.getContext('2d');
-      x.fillStyle = (o.palette || {}).bg || '#000000';
+      x.fillStyle = bg;
       x.beginPath();
       if (x.roundRect) x.roundRect(0, 0, 64, 64, 14); else x.rect(0, 0, 64, 64);
       x.fill();
@@ -80,10 +93,9 @@ export function faviconFor(o, link) {
       link.href = ic.toDataURL('image/png');
     };
     img.src = 'data:image/png;base64,' + o.sprites.sheet;
-  } else if (o.outline && o.eyes && o.palette) {
-    const icon = obaSvg(o).replace('<svg ', `<svg style="background:${o.palette.bg};border-radius:22%" `);
-    link.href = 'data:image/svg+xml,' + encodeURIComponent(icon);
-  } else {
-    link.href = 'favicon.png';
+    return;
   }
+  const svg = obaSvg(o);
+  const icon = svg && svg.replace('<svg ', `<svg style="background:${bg};border-radius:22%" `);
+  link.href = icon ? 'data:image/svg+xml,' + encodeURIComponent(icon) : 'favicon.png';
 }

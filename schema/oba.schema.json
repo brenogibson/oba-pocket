@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/brenogibson/oba-pocket/schema/oba.schema.json",
+  "$id": "https://raw.githubusercontent.com/brenogibson/oba-pocket/main/schema/oba.schema.json",
   "title": "Oba",
   "description": "Um Oba do Oba Pocket: corpo (look), humores, reflexos e o agente que é o cérebro dele. Coordenadas em pixels, relativas ao centro do Oba, com y para baixo.",
   "type": "object",

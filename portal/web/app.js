@@ -2,7 +2,7 @@
 
 import { start, login, logout, user } from './auth.js';
 import { connect } from './live.js';
-import { shade, drawOba, faviconFor } from './oba-render.js';
+import { COLOR, shade, drawOba, faviconFor } from './oba-render.js';
 import { $, setCurrent, toast } from './ui.js';
 import * as meeting from './meeting.js';
 import * as device from './device.js';
@@ -13,7 +13,6 @@ const C = window.OBA_PORTAL;
 const TABS = { reuniao: 'meeting', placa: 'device', obas: 'obas', enviar: 'upload' };
 let stopAvatar = () => {};
 const THEME = ['--accent', '--accent2', '--soft', '--muted', '--bg', '--panel', '--on-accent', '--accent-text'];
-const COLOR = /^#[0-9a-f]{6}$/i;
 
 // Contraste do WCAG entre duas cores #rrggbb (1 a 21)
 function luminance(c) {

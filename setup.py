@@ -44,7 +44,9 @@ import sys
 import tempfile
 import time
 import zipfile
+from http.client import HTTPException
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import boto3
 from botocore.exceptions import ClientError
@@ -189,7 +191,20 @@ def load_config(path: Path) -> dict:
     for name, a in (cfg.get("agents") or {}).items():
         if a.get("type") not in ("agentcore", "http") or (a["type"] == "http" and not a.get("url")):
             fail(f"agents.{name}: use {{\"type\": \"agentcore\"[, \"arn\"]}} ou {{\"type\": \"http\", \"url\"}}")
+        if a["type"] == "http" and not agent_url_ok(a["url"]):
+            fail(f"agents.{name}: a url precisa ser https (http só em localhost, 127.0.0.1 ou ::1)")
+    portal_cfg(cfg)  # antes de criar qualquer recurso
     return cfg
+
+
+def agent_url_ok(url) -> bool:
+    """A transcrição vai no corpo: https, ou http só na própria máquina."""
+    try:
+        u = urlsplit(str(url))
+        host = u.hostname
+    except ValueError:
+        return False
+    return bool(host) and (u.scheme == "https" or (u.scheme == "http" and host in ("localhost", "127.0.0.1", "::1")))
 
 
 def init(cfg):
@@ -374,7 +389,9 @@ def device_policy(alias: str) -> str:
     thing = "${iot:Connection.Thing.ThingName}"  # o client ID do MQTT é o nome do thing
     topic = lambda ch: f"{IOT_ARN}:topic/{P}/{thing}/{ch}"
     ensure_iot_policy(name, doc(
-        allow("Connect", "iot:Connect", f"{IOT_ARN}:client/{thing}"),
+        # Só com o certificado preso ao thing: anexada a outro, a policy não conecta
+        allow("Connect", "iot:Connect", f"{IOT_ARN}:client/{thing}",
+              Condition={"Bool": {"iot:Connection.Thing.IsAttached": "true"}}),
         allow("Publish", "iot:Publish", [topic(c) for c in ("state", "evt", "transcript", "reply")]),
         allow("RetainState", "iot:RetainPublish", topic("state")),
         allow("Commands", "iot:Subscribe", f"{IOT_ARN}:topicfilter/{P}/{thing}/cmd"),
@@ -577,6 +594,7 @@ def agent_role(name: str) -> str:
         allow("OnlyTheListedModels", ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"], model_arns()),
         allow("Logs", ["logs:CreateLogGroup", "logs:DescribeLogStreams"], [group]),
         allow("LogStreams", ["logs:CreateLogStream", "logs:PutLogEvents"], [f"{group}:log-stream:*"]),
+        # Exigido: está na role de execução da doc do AgentCore Runtime (IAM Permissions for AgentCore Runtime)
         allow("DescribeLogGroups", "logs:DescribeLogGroups", [f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:*"]),
     )
     return ensure_role(f"{P}-agent", trust, policy, "Oba Pocket: agente no AgentCore (só os modelos da lista e logs)")
@@ -765,10 +783,15 @@ def ensure_router(table_arn: str, agents: dict, data_endpoint: str) -> str:
     fn = f"{P}-router"
     role = router_role(fn, table_arn, agents)
     icons = sorted((ROUTER_SRC / "icons").glob("*.png"))
-    if not icons:
+    if not icons:  # opcionais: sem eles, o balão sai sem o ícone do serviço
         import fetch_icons
-        fetch_icons.fetch()
+        try:
+            fetch_icons.fetch()
+        except (OSError, HTTPException, zipfile.BadZipFile) as e:  # URLError e HTTPError são OSError
+            print(f"  aviso: os ícones não baixaram ({e})")
         icons = sorted((ROUTER_SRC / "icons").glob("*.png"))
+        if not icons:
+            print("  aviso: sem ícones; rode tools/fetch_icons.py --url <zip novo> e o setup.py de novo")
     files = [ROUTER_SRC / "router.py", ROUTER_SRC / "icons.py", *icons]
     env = {"PREFIX": P, "TABLE": table_arn.split("/")[-1], "BUCKET": BUCKET, "IOT_ENDPOINT": data_endpoint,
            "AGENTS": json.dumps(agents, separators=(",", ":")), "URL_HOSTS": ",".join(CFG.get("url_hosts") or [])}
@@ -815,7 +838,7 @@ PORTAL_TIMEOUT = 30             # o mesmo do CloudFront para a origem
 PORTAL_CONCURRENCY = 10
 INSTALLER_TIMEOUT = 300         # o envio, a conferência e o toque em "Instalar" (até 60 s)
 TOKEN_MINUTES = 60
-REFRESH_DAYS = 30
+REFRESH_DAYS = 7                # o refresh fica no navegador: um roubado vale pouco tempo
 CACHING_OPTIMIZED = "658327ea-f89d-4fab-a63d-7e88639e58f6"   # políticas gerenciadas do CloudFront
 CACHING_DISABLED = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
 ALL_VIEWER_EXCEPT_HOST = "b689b0a8-53d0-40ab-baf2-68738e2966ac"
@@ -828,8 +851,9 @@ def conf_sha(conf) -> str:
     return hashlib.sha256(json.dumps(conf, sort_keys=True, default=str).encode()).hexdigest()[:32]
 
 
-def portal_cfg() -> dict:
-    pc = CFG.get("portal") or {}
+def portal_cfg(cfg: dict) -> dict:
+    """Checado no load_config, antes de criar qualquer recurso."""
+    pc = cfg.get("portal") or {}
     for u in pc.get("users") or []:
         if not re.fullmatch(r"[a-z0-9._-]{2,64}", str(u.get("username", ""))) or "@" not in str(u.get("email", "")):
             fail("portal.users: cada um com \"username\" (minúsculas, números, . _ -) e \"email\"")
@@ -1067,8 +1091,10 @@ def lambda_logs(fn: str) -> list:
 def portal_api_role(fn: str, installer: str) -> str:
     return ensure_role(fn, lambda_trust(), doc(
         *lambda_logs(fn),
-        # O IAM não restringe o AttachPolicy pelo alvo Cognito: a policy anexada é fixa no código
-        # (VIEWER_POLICY), e o Deny garante que a API nunca mexe em certificados, em região nenhuma
+        # "*" de propósito: na Service Authorization Reference, o AttachPolicy só tem cert e thinggroup
+        # como recurso; nem a policy nem a identidade Cognito servem de Resource. A policy anexada é fixa
+        # no código (VIEWER_POLICY), e o Deny garante que a API nunca mexe em certificados nem em grupos,
+        # em região nenhuma
         allow("ViewerPolicy", "iot:AttachPolicy", "*"),
         {"Sid": "NotDevices", "Effect": "Deny", "Action": "iot:AttachPolicy",
          "Resource": [f"arn:aws:iot:*:{ACCOUNT}:cert/*", f"arn:aws:iot:*:{ACCOUNT}:thinggroup/*"]},
@@ -1321,7 +1347,6 @@ def upload_portal(bucket: str, config_js: bytes) -> int:
 
 
 def ensure_portal(data_ep: str) -> tuple[str, str]:
-    portal_cfg()
     bucket = ensure_portal_bucket()
     url = portal_url(find_distribution())
     pool = ensure_user_pool(url)
