@@ -259,7 +259,7 @@ A placa não assina esses tópicos. O portal assina todos, e também `state`, `t
 |---|---|---|
 | `ui/oba` | sim | o Oba ativo para desenhar: `{id, name, version, palette, outline, eyes, wake_words, sounds}` (rig) ou `{id, name, version, palette, sprites, wake_words, sounds}` (sprites); `sounds` são os nomes que o `play` aceita |
 | `ui/think` | | `{state: "start" \| "end", run, note?}`: o agente está pensando |
-| `ui/summary` | sim | resumo da reunião: `{session, lines, title, summary, topics, decisions, next_steps, suggestions}` |
+| `ui/summary` | sim | resumo da reunião: `{session, lines, title, summary, topics, decisions, next_steps, suggestions}`; também vai para o [histórico](#histórico-de-resumos) |
 | `ui/install` | | andamento de uma instalação pelo portal (publicado pelo instalador, não pelo roteador): `{cid, id, stage, …}` |
 
 No `ui/install`, `cid` é o `id` do `oba.install` e `id` é o Oba. `stage` vai de `start`
@@ -483,6 +483,37 @@ Cada `rec.on` abre uma sessão nova, com id `AAAAMMDD-HHMMSS-xxxxxx`. A sessão 
 A memória do Oba (`memory`) é separada da sessão: fica por placa e por Oba, e passa
 de uma sessão para a outra.
 
+Os eventos e as regras de uma sessão ficam 7 dias na tabela `<p>-sessions` (TTL no
+atributo `expires`); os de fora do REC ficam na sessão `-`.
+
+### Histórico de resumos
+
+Todo `ui/summary` com dados que o roteador publica, de qualquer Oba, também vira um item
+na mesma tabela, por `portal.history_days` dias (padrão 30, de 1 a 365, no `config.json`):
+
+| pk | sk | Atributos |
+|---|---|---|
+| `hist#<dev>` | `<ts>#<sessão>` | `ts` (ms, 13 dígitos), `session`, `title`, `lines`, `oba`, `summary` (o JSON publicado), `expires` |
+
+A sessão é a da rodada que publicou (a que acabou, no `rec.off`), ou `-` fora do REC. O
+JSON guardado vai até 64 KB: passando disso, o roteador corta os textos e as listas, e
+se ainda não couber não guarda.
+
+A API do portal lê e apaga esses itens. O id é o sk com `_` no lugar do `#`
+(`1790512920000_20260927-120000-a1b2c3`, ou `1790512920000_-`):
+
+| Rota | |
+|---|---|
+| `GET /api/history` | `{items: [{id, ts, title, lines, oba, expires}], truncated, days}`, do mais novo para o mais antigo, até 200 |
+| `GET /api/history/<id>` | o resumo inteiro, com `id` e `expires` |
+| `DELETE /api/history/<id>` | apaga a sessão (`s#<dev>#<sessão>`: eventos e regras) e depois o resumo. Se o `ui/summary` retido é dessa sessão, ele sai também. Com `-`, só o resumo. `409` se a sessão ainda está gravando |
+| `DELETE /api/history` | o mesmo para todos, menos o da sessão que está gravando (`kept`) |
+
+As duas de apagar devolvem `more: true` quando passam de 20 s (o tempo é conferido entre
+os lotes de 25): o portal pede de novo até acabar. Sem `TABLE` no ambiente da Lambda (o
+código novo subiu e o `setup.py` ainda não trocou a configuração), as rotas do histórico
+dão `503` e as outras seguem.
+
 ### Contrato roteador → agente
 
 Requisição (JSON):
@@ -554,6 +585,12 @@ agente.
   passam pelo `cmd`, que o navegador também lê. A API também envia Obas para o registro
   (`POST /api/obas`, em zip) e tira de lá (`DELETE /api/obas/<id>`): quem entra no
   portal mexe no registro.
+- O histórico (`/api/history`) só alcança as pk `hist#<dev>` e `s#<dev>#*` da tabela
+  (`dynamodb:LeadingKeys` na role da API), lê só `rec` e `session` da placa e, no IoT, só
+  o `ui/summary` retido. O id passa por uma regex estrita antes de virar chave. O
+  `BatchWriteItem` da role também deixaria gravar nessas pk; a API só apaga.
+- O roteador e o agente não escrevem as falas nem o resumo no log (CloudWatch, 30 dias):
+  só os tipos das ações, os ids e os tempos. Apagar no portal não precisa chegar lá.
 - Comandos com limites na placa: vibrar até 2 s, LEDs até 60 s, olhar até 5 s,
   8 regras, e balão de até 280 caracteres com PNG de até 12 KB.
 - Instalar um Oba pelo ar sempre pede o toque em "Instalar" na tela da placa, e a placa

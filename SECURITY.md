@@ -30,9 +30,10 @@ Quem pode ler e comandar a placa:
 - **A própria placa**, com o certificado dela. Só publica nos tópicos dela
   (`<prefixo>/<placa>/`) e só recebe o `cmd` e o `ext/<fonte>`. As credenciais
   temporárias que ela pega com o certificado só abrem streams do Transcribe.
-- **Os usuários do portal**, com login no Cognito. Leem as legendas, o resumo e o
-  estado da placa, mandam os comandos da tela dela (ativar, remover, tocar um som,
-  desligar o REC) e enviam, instalam e apagam Obas do registro. Não leem os pedidos das
+- **Os usuários do portal**, com login no Cognito. Leem as legendas, os resumos e o
+  estado da placa, apagam o histórico de resumos (com as legendas de cada conversa),
+  mandam os comandos da tela dela (ativar, remover, tocar um som, desligar o REC) e
+  enviam, instalam e apagam Obas do registro. Não leem os pedidos das
   fontes externas e não ligam o REC.
 - **As pontes do Claude Code**, cada uma com o próprio certificado. Cada ponte só
   publica no próprio `ext/<fonte>` e só lê a resposta dela e o `state` da placa.
@@ -57,6 +58,10 @@ Algumas coisas não são falha, mas é bom saber:
 - **O agente `http` é só para desenvolvimento.** O roteador chama sem autenticação, e
   quem tiver a URL usa o seu Bedrock. Fora de `localhost`, `127.0.0.1` e `::1`, a URL
   precisa ser `https`.
+- **As conversas ficam na sua conta.** Os eventos de cada sessão (as legendas) ficam 7
+  dias no DynamoDB, e os resumos, 30 (`portal.history_days`). Quem lê a tabela na conta lê
+  as conversas. A aba Histórico do portal apaga antes do prazo. Nos logs do CloudWatch
+  (30 dias), o roteador e o agente só escrevem o técnico, sem as falas nem o resumo.
 - **Os comandos de teste da serial** (REC, fala simulada, eventos falsos e responder aos
   pedidos das fontes externas) só existem no firmware dev (`pio run -e dev -t upload`).
   Não grave o firmware dev numa placa que sai de perto de você.
@@ -74,9 +79,12 @@ send email. Don't include keys, certificates or account ids.
 servers, third-party libraries and old versions or forks are out of scope.
 
 **Threat model, in short:** the device only publishes on its own topics and only
-receives `cmd` and `ext/<source>`. Portal users can read the captions, the summary and
-the state, send the device screen's commands and upload, install and delete Obas, but
-can't read external source requests or turn REC on. Each Claude Code bridge only talks
+receives `cmd` and `ext/<source>`. Portal users can read the captions, the summaries and
+the state, delete the summary history, send the device screen's commands and upload,
+install and delete Obas, but can't read external source requests or turn REC on.
+Session events (the captions) stay 7 days in DynamoDB and summaries 30
+(`portal.history_days`); the History tab deletes them sooner. CloudWatch Logs get only the technical
+part (action types, ids, timings), never the captions or the summary. Each Claude Code bridge only talks
 on its own `ext/<source>`. Physical access to the device means access to its key: the
 flash isn't encrypted ([Lost the board?](README.en.md#lost-the-board)). The portal has
 no WAF or rate limit. The `http` agent is for development only and has no

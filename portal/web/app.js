@@ -5,12 +5,13 @@ import { connect } from './live.js';
 import { COLOR, shade, drawOba, faviconFor } from './oba-render.js';
 import { $, setCurrent, toast } from './ui.js';
 import * as meeting from './meeting.js';
+import * as hist from './history.js';
 import * as device from './device.js';
 import * as obas from './obas.js';
 import './upload.js';
 
 const C = window.OBA_PORTAL;
-const TABS = { reuniao: 'meeting', placa: 'device', obas: 'obas', enviar: 'upload' };
+const TABS = { reuniao: 'meeting', historico: 'history', placa: 'device', obas: 'obas', enviar: 'upload' };
 let stopAvatar = () => {};
 const THEME = ['--accent', '--accent2', '--soft', '--muted', '--bg', '--panel', '--on-accent', '--accent-text'];
 
@@ -35,6 +36,7 @@ function showTab() {
     document.querySelector(`nav a[href="#${hash}"]`).classList.toggle('on', hash === name);
   }
   obas.shown(name === 'obas');
+  hist.shown(name === 'historico');
 }
 
 function setOba(o) {
@@ -83,6 +85,7 @@ function onMessage(ch, m, retained) {
   device.onMessage(ch, m, retained);
   meeting.onMessage(ch, m, retained);
   obas.onMessage(ch, m);
+  hist.onMessage(ch, m, retained);
   setStatus(connected);
 }
 

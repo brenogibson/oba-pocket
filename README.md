@@ -24,15 +24,16 @@ biblioteca de Obas. Sem cartão, a placa usa o Oba embutido, o Nimbo (`obas/nimb
 - **Acompanha uma reunião:** com o REC ligado, o áudio vai direto da placa para o
   Amazon Transcribe. O agente lê as legendas e responde com um balão na hora ou com
   uma "carta na manga", uma regra que dispara na placa quando alguém volta ao assunto.
-  Quando o REC desliga, o resumo aparece no portal.
+  Quando o REC desliga, o resumo aparece no portal e fica no histórico por 30 dias
+  (`portal.history_days`).
 - **Atende pelo nome:** com o REC ligado, falar o nome do Oba faz ele reagir na hora e
   publica o evento `wake`. O agente só acorda com isso se o Oba tiver `{"on": "wake"}`
   em `agent.triggers`.
 - **Troca de Oba pelo ar:** o portal (ou o `tools/oba.py install`) manda um Oba pelo
   MQTT, e a placa confere o sha256 de cada arquivo e pergunta na tela antes de instalar.
 - **Portal no celular:** um site com login mostra as legendas, as cartas e o resumo, o
-  estado da placa e os Obas do registro, com prévia. Também recebe um Oba novo em zip e
-  tira Obas do registro. Não precisa de computador por perto.
+  histórico dos resumos, o estado da placa e os Obas do registro, com prévia. Também
+  recebe um Oba novo em zip e tira Obas do registro. Não precisa de computador por perto.
 - **Aprova o Claude Code pela placa:** a [ponte do Claude Code](docs/ponte.md) mostra no
   Oba quando o Claude está trabalhando ou esperando você, e leva os pedidos de permissão
   para a tela. Aprovar ou negar é um toque; o pedido perigoso pede segurar o botão.
@@ -111,9 +112,11 @@ que roda em cada núcleo da placa. Dá para editar no draw.io:
   (persona, modelo, habilidades, MCPs de uma lista permitida). Qualquer agente que
   siga o [contrato](docs/protocol.md#contrato-roteador--agente) pode ser o cérebro de um Oba.
 - **Portal** (`portal/`): um site no CloudFront, com login no Cognito, pensado para o
-  celular. A aba Reunião mostra as legendas, as cartas e o resumo. A aba Placa mostra o
-  estado e manda os comandos que a tela da placa oferece: ativar, remover, tocar um som e
-  desligar o REC. A aba Obas lista o registro com prévia, instala na placa e tira do
+  celular. A aba Reunião mostra as legendas, as cartas e o resumo. A aba Histórico lista
+  os resumos guardados, abre cada um, baixa em Markdown (.md) e apaga (o resumo e as
+  legendas da conversa). A aba
+  Placa mostra o estado e manda os comandos que a tela da placa oferece: ativar, remover,
+  tocar um som e desligar o REC. A aba Obas lista o registro com prévia, instala na placa e tira do
   registro, e a aba Enviar recebe um Oba novo em zip. O navegador só lê os tópicos da
   placa; o resto passa pela API (`portal/api/`). Detalhes em [Portal](#portal).
 - **CLI** (`tools/oba.py`): faz o mesmo pela linha de comando, com o perfil da AWS CLI e
@@ -145,8 +148,9 @@ estático no CloudFront, e a API dele é uma Lambda que só roda quando alguém 
   volta para a placa. Do tópico `transcript`, só as frases finais seguem pela IoT Rule
   até o roteador. Os eventos `wake` e `rule.fired` levam junto a frase em que o nome ou
   a palavra apareceu, às vezes ainda parcial.
-- **O estado não fica na Lambda.** A sessão, as regras armadas e a memória ficam no
-  DynamoDB, e os Obas no S3. A Lambda só guarda um cache curto do `oba.json`.
+- **O estado não fica na Lambda.** A sessão, as regras armadas, a memória e o histórico
+  de resumos ficam no DynamoDB, e os Obas no S3. A Lambda só guarda um cache curto do
+  `oba.json`.
 - **O cérebro é trocável.** O Oba escolhe o agente pelo nome, no catálogo `agents` do
   `config.json`. Pode ser outro runtime do AgentCore (`{"type": "agentcore", "arn": "…"}`),
   que roda agentes de qualquer framework (Strands, LangGraph, LangChain…) desde que
@@ -184,6 +188,15 @@ no identity pool), e o thing da placa tem o nome de `device`. O user pool nasce 
 proteção contra exclusão ligada (desligue antes), a distribuição do CloudFront precisa
 ser desativada antes de ser apagada, e o bucket do registro guarda versões.
 
+As conversas ficam na tabela `<prefixo>-sessions`: os eventos de cada sessão (as
+legendas, as cartas e as regras) por 7 dias, e os resumos por 30 (`portal.history_days`,
+de 1 a 365). Depois o TTL do DynamoDB apaga sozinho, com até alguns dias de atraso. Para
+apagar antes, use a aba Histórico: um resumo ou todos, e cada um leva junto a sessão
+dele. A sessão que ainda está gravando fica. Um resumo feito fora do REC sai sozinho:
+os eventos soltos da placa não são da conversa. Os logs do CloudWatch (30 dias) ficam
+fora disso, mas o roteador e o agente só escrevem neles o técnico (tipos das ações, ids,
+tempos), sem as falas nem o resumo.
+
 ### Portal
 
 Da sua conta, só o CloudFront atende a internet. Os endpoints da própria AWS (o login do
@@ -210,8 +223,8 @@ Cognito e o IoT Core, que a placa já usa) são os de sempre.
   `portal/web/vendor/`. O refresh token fica no navegador por até 7 dias: a sessão do
   portal dura isso sem pedir login de novo, e "Sair" revoga.
 
-Quem entra no portal vê as legendas e o resumo, manda os comandos da tela da placa e
-envia, instala e apaga Obas do registro. Dê acesso só a quem pode fazer isso.
+Quem entra no portal vê as legendas e os resumos, apaga o histórico, manda os comandos
+da tela da placa e envia, instala e apaga Obas do registro. Dê acesso só a quem pode fazer isso.
 
 Para cortar alguém, desative o usuário e faça o sign-out global. O `<pool>` é o id do
 user pool `<prefixo>-portal`:
@@ -302,6 +315,9 @@ No portal:
 - **Domínio próprio:** `portal.domain` com `portal.cert_arn` (um certificado do ACM em
   us-east-1). Sem eles, o endereço é o `*.cloudfront.net` da distribuição, que ainda
   aceita TLS 1.0; com eles, o CloudFront exige TLS 1.2 ou mais novo.
+- **Histórico:** `portal.history_days` (padrão 30, de 1 a 365) diz quantos dias cada
+  resumo fica. Vale para os resumos novos, e quem grava é o roteador: depois de mudar,
+  rode o `setup.py` inteiro, não só o `--portal`.
 - **No celular:** "Adicionar à tela de início" abre o portal como um app.
 
 No agente:

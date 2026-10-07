@@ -16,3 +16,4 @@ display/
 *.pem
 *.key
 .env
+resumos/

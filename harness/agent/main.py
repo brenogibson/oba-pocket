@@ -16,7 +16,7 @@ import time
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 from abilities import find
-from core import dumps, log
+from core import log
 
 logging.basicConfig(level=logging.INFO)
 app = BedrockAgentCoreApp()
@@ -30,8 +30,11 @@ def invoke(req: dict) -> dict:
     fn = find(oba.get("abilities"), req["run"])
     started = time.time()
     out = fn(req)
-    log.info("%s/%s (%s) em %.1fs: %s", oba.get("id"), req["run"], fn.__name__, time.time() - started,
-             dumps(out)[:800])
+    # Só os tipos das ações: o texto é da conversa, e o log fica mais que o que o portal apaga
+    acts = [a for a in (out.get("actions") or []) if isinstance(a, dict)] if isinstance(out, dict) else []
+    log.info("%s/%s (%s) em %.1fs: %d ações %s", oba.get("id"), req["run"], fn.__name__, time.time() - started,
+             len(acts), [f"{a.get('type')}/{a['channel']}" if isinstance(a.get("channel"), str) else a.get("type")
+                         for a in acts[:12]])
     return out
 
 

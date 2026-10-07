@@ -6,6 +6,9 @@ usa o Authorization para assinar o pedido à Lambda. Não há cookie, então nã
 
 Os Obas enviados em zip passam pela mesma validação da CLI (tools/oba.py validate) antes
 de ir para o registro; a instalação na placa fica com o instalador (installer.py).
+
+O histórico lê e apaga, na tabela do roteador, só os resumos (hist#<placa>) e as sessões
+(s#<placa>#<sessão>) desta placa; a role da Lambda só deixa essas pk (setup.py).
 """
 
 import base64
@@ -41,7 +44,9 @@ POOL = os.environ["USER_POOL"]
 CLIENT = os.environ["CLIENT_ID"]
 IDENTITY_POOL = os.environ["IDENTITY_POOL"]
 VIEWER_POLICY = os.environ["VIEWER_POLICY"]
-CMD_TOPIC = f"{os.environ['PREFIX']}/{os.environ['DEVICE']}/cmd"
+DEVICE = os.environ["DEVICE"]
+CMD_TOPIC = f"{os.environ['PREFIX']}/{DEVICE}/cmd"
+SUMMARY_TOPIC = f"{os.environ['PREFIX']}/{DEVICE}/ui/summary"
 ISSUER = f"https://cognito-idp.{REGION}.amazonaws.com/{POOL}"
 BUCKET = os.environ["BUCKET"]          # registro dos Obas
 INSTALLER = os.environ["INSTALLER"]
@@ -51,6 +56,11 @@ ZIP_ENTRIES_MAX = 256
 LIST_MAX = 60                          # Obas por resposta (cada um leva a folha idle)
 SHEET_MAX = 48 * 1024                  # como no ui/oba (harness/router/router.py)
 COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
+HISTORY_DAYS = int(os.environ.get("HISTORY_DAYS") or 30)   # o roteador guarda os resumos por isso
+HIST_LIST_MAX = 200
+# id de um resumo: <ts>_<sessão> (sk <ts>#<sessão> do roteador; "-" = fora do REC)
+HIST_ID = r"[0-9]{13}_(?:[0-9]{8}-[0-9]{6}-[0-9a-f]{6}|-)"   # [0-9]: o \d aceita dígito Unicode
+WORK_S = 20                            # depois disso, o apagar devolve "more" e o portal pede de novo
 
 KEYS = {k["kid"]: jwt.PyJWK(k) for k in json.loads(os.environ.get("JWKS") or '{"keys": []}')["keys"]}
 keys_fetched = 0.0
@@ -61,8 +71,12 @@ iot = boto3.client("iot")
 iot_data = boto3.client("iot-data", endpoint_url=f"https://{os.environ['IOT_ENDPOINT']}")
 s3 = boto3.client("s3")
 lam = boto3.client("lambda")
+dynamo = boto3.resource("dynamodb")
+# Sem TABLE (o código novo sobe antes do env novo no setup.py), só o histórico fica fora
+table = dynamo.Table(os.environ["TABLE"]) if os.environ.get("TABLE") else None
 NAME_RE = re.compile(r"[a-z0-9_-]{1,31}")  # id de Oba e nome de som (schema/oba.schema.json)
 ACCOUNT = None                             # dono do bucket de registro, do ARN da própria Lambda
+STARTED = 0.0                              # começo do pedido (time.monotonic)
 
 
 class HttpError(Exception):
@@ -296,6 +310,179 @@ def remove_oba(user: dict, event: dict, oid: str) -> dict:
     return {"id": oid, "deleted": n}
 
 
+# ---------- histórico de resumos (DynamoDB do roteador) ----------
+
+HIST_PK = f"hist#{DEVICE}"
+
+
+def need_table():
+    if table is None:
+        raise HttpError(503, "o histórico ainda não está pronto: rode o setup.py de novo")
+
+
+def names(*attrs) -> dict:
+    """#<nome> para cada atributo da expressão (vários são palavras reservadas do DynamoDB)."""
+    return {f"#{a}": a for a in attrs}
+
+
+def hist_key(hid: str) -> tuple[str, str]:
+    """sk e sessão de um id que a rota já conferiu (HIST_ID)."""
+    ts, sid = hid.split("_", 1)
+    return f"{ts}#{sid}", sid
+
+
+def hist_item(it: dict) -> dict:
+    return {"id": it["sk"].replace("#", "_", 1), "ts": int(it["ts"]), "title": it.get("title") or "",
+            "lines": int(it.get("lines") or 0), "oba": it.get("oba") or "", "expires": int(it["expires"]) * 1000}
+
+
+def hist_query(attrs: tuple, limit: int | None = None) -> list[dict]:
+    """Os resumos do mais novo para o mais antigo, só com attrs; para em limit."""
+    items, kw = [], {}
+    while True:
+        r = table.query(KeyConditionExpression="#pk = :pk", ExpressionAttributeValues={":pk": HIST_PK},
+                        ProjectionExpression=", ".join(f"#{a}" for a in attrs),
+                        ExpressionAttributeNames=names("pk", *attrs), ScanIndexForward=False,
+                        ConsistentRead=True, **kw)
+        items += r["Items"]
+        if (limit and len(items) >= limit) or "LastEvaluatedKey" not in r:
+            return items
+        kw["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+
+
+def list_history(user: dict, event: dict) -> dict:
+    """Sem o corpo, até HIST_LIST_MAX. O TTL apaga com atraso: o vencido já não aparece."""
+    need_table()
+    now = time.time()
+    items = [hist_item(it) for it in hist_query(("sk", "ts", "title", "lines", "oba", "expires"), HIST_LIST_MAX + 1)
+             if int(it.get("expires", 0)) > now]
+    return {"items": items[:HIST_LIST_MAX], "truncated": len(items) > HIST_LIST_MAX, "days": HISTORY_DAYS}
+
+
+def get_history(user: dict, event: dict, hid: str) -> dict:
+    need_table()
+    sk, _ = hist_key(hid)
+    it = table.get_item(Key={"pk": HIST_PK, "sk": sk}).get("Item")
+    if not it or int(it.get("expires", 0)) <= time.time():
+        raise HttpError(404, "esse resumo não está mais no histórico")
+    try:
+        body = json.loads(it["summary"])
+    except ValueError:
+        body = None
+    return {**(body if isinstance(body, dict) else {}), "id": hid, "expires": int(it["expires"]) * 1000}
+
+
+def recording() -> str | None:
+    """A sessão que está gravando agora (REC ligado), ou None. A role só deixa ler rec e session."""
+    it = table.get_item(Key={"pk": f"dev#{DEVICE}", "sk": "device"}, ProjectionExpression="#rec, #session",
+                        ExpressionAttributeNames=names("rec", "session")).get("Item") or {}
+    return it.get("session") if it.get("rec") and it.get("session") else None
+
+
+def out_of_time() -> bool:
+    return time.monotonic() - STARTED > WORK_S
+
+
+def batch_delete(keys: list[dict]) -> int:
+    """BatchWriteItem em lotes de 25; o que a tabela não processou vai de novo, com espera.
+    Confere o tempo entre os lotes (com espera, uma página passaria do timeout): devolve
+    quantos apagou."""
+    for i in range(0, len(keys), 25):
+        if i and out_of_time():
+            return i
+        req = {table.name: [{"DeleteRequest": {"Key": k}} for k in keys[i:i + 25]]}
+        for attempt in range(8):
+            req = dynamo.batch_write_item(RequestItems=req).get("UnprocessedItems") or {}
+            if not req.get(table.name):
+                break
+            time.sleep(min(0.05 * 2 ** attempt, 1))
+        else:
+            raise HttpError(503, "a tabela está ocupada: tente de novo")
+    return len(keys)
+
+
+def drop_session(sid: str) -> tuple[int, bool]:
+    """Apaga os eventos e as regras da sessão. Devolve quantos e se acabou."""
+    n, kw = 0, {}
+    while not out_of_time():
+        r = table.query(KeyConditionExpression="#pk = :pk", ExpressionAttributeValues={":pk": f"s#{DEVICE}#{sid}"},
+                        ProjectionExpression="#pk, #sk", ExpressionAttributeNames=names("pk", "sk"),
+                        ConsistentRead=True, Limit=500, **kw)
+        got = batch_delete([{"pk": it["pk"], "sk": it["sk"]} for it in r["Items"]])
+        n += got
+        if got < len(r["Items"]):     # o tempo acabou no meio da página: a Query seguinte começa do resto
+            return n, False
+        if "LastEvaluatedKey" not in r:
+            return n, True
+        kw["ExclusiveStartKey"] = r["LastEvaluatedKey"]
+    return n, False
+
+
+def drop_one(sk: str, sid: str) -> tuple[int, bool]:
+    """A sessão e depois o resumo: se o tempo acabar no meio, o resumo fica na lista para
+    apagar de novo. Fora do REC ("-") só o resumo: os eventos soltos não são da conversa."""
+    n, done = (0, True) if sid == "-" else drop_session(sid)
+    if done:
+        table.delete_item(Key={"pk": HIST_PK, "sk": sk})
+    return n, done
+
+
+def drop_retained(gone: list[tuple[str, int]]):
+    """Tira o ui/summary retido se ele é de um resumo apagado (mesma sessão ou, fora do REC,
+    mesmo ts): senão o "Último resumo" da aba Reunião ainda mostraria a conversa."""
+    try:
+        raw = iot_data.get_retained_message(topic=SUMMARY_TOPIC).get("payload") or b""
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ResourceNotFoundException":
+            return
+        raise
+    try:
+        cur = json.loads(raw)
+    except ValueError:
+        return
+    if isinstance(cur, dict) and any(cur.get("session") == sid if sid != "-" else cur.get("ts") == ts
+                                     for sid, ts in gone):
+        iot_data.publish(topic=SUMMARY_TOPIC, qos=1, retain=True, payload=b"")
+
+
+def delete_history(user: dict, event: dict, hid: str) -> dict:
+    """Apaga o resumo e a sessão dele. A sessão que está gravando, não."""
+    need_table()
+    sk, sid = hist_key(hid)
+    if not table.get_item(Key={"pk": HIST_PK, "sk": sk}, ProjectionExpression="#sk",
+                          ExpressionAttributeNames=names("sk")).get("Item"):
+        raise HttpError(404, "esse resumo não está mais no histórico")
+    if sid != "-" and sid == recording():
+        raise HttpError(409, "essa sessão ainda está gravando: desligue o REC e apague depois")
+    n, done = drop_one(sk, sid)
+    if done:
+        drop_retained([(sid, int(sk[:13]))])
+    return {"id": hid, "events": n, "more": not done}
+
+
+def clear_history(user: dict, event: dict) -> dict:
+    """Apaga todos, menos o da sessão que está gravando. "more": o tempo acabou, peça de novo."""
+    need_table()
+    live, gone, n, kept, more = recording(), [], 0, 0, False
+    for it in hist_query(("sk",)):
+        sid = it["sk"].split("#", 1)[1]
+        if sid == live:
+            kept += 1
+            continue
+        if out_of_time():
+            more = True
+            break
+        events, done = drop_one(it["sk"], sid)
+        n += events
+        if not done:
+            more = True
+            break
+        gone.append((sid, int(it["sk"][:13])))
+    if gone:
+        drop_retained(gone)
+    return {"deleted": len(gone), "events": n, "kept": kept, "more": more}
+
+
 # ---------- envio de um Oba em zip ----------
 
 def unsafe(name: str) -> bool:
@@ -430,6 +617,10 @@ ROUTES = [
     ("GET", re.compile(r"/api/obas"), list_obas),
     ("POST", re.compile(r"/api/obas"), upload_oba),
     ("DELETE", re.compile(r"/api/obas/([a-z0-9_-]{1,31})"), remove_oba),
+    ("GET", re.compile(r"/api/history"), list_history),
+    ("DELETE", re.compile(r"/api/history"), clear_history),
+    ("GET", re.compile(rf"/api/history/({HIST_ID})"), get_history),
+    ("DELETE", re.compile(rf"/api/history/({HIST_ID})"), delete_history),
 ]
 
 
@@ -452,8 +643,9 @@ def route_of(method: str, path: str):
 
 
 def handler(event, context):
-    global ACCOUNT
+    global ACCOUNT, STARTED
     ACCOUNT = ACCOUNT or context.invoked_function_arn.split(":")[4]
+    STARTED = time.monotonic()
     http = event["requestContext"]["http"]
     method, path = http["method"], event.get("rawPath", "")
     user = None

@@ -2,6 +2,7 @@
 // sugestões que o Oba mostrou e o resumo quando o REC desliga.
 
 import { $, esc, current } from './ui.js';
+import { openSummary, closeSummary, showing } from './summary.js';
 
 const KIND_LABEL = { service: 'Serviço AWS', blog: 'Blog AWS', doc: 'Documentação', demo: 'Demo', tip: 'Dica' };
 const lines = [];           // frases finais
@@ -130,7 +131,7 @@ function onCommand(m) {
     case 'disarm': disarm(m.id); break;
     case 'reset':               // session nova = começou uma reunião; null = acabou
       clearAll();
-      if (m.session) { lines.length = 0; partial = null; hits = 0; renderCounter(); render(); hideSummary(); }
+      if (m.session) { lines.length = 0; partial = null; hits = 0; renderCounter(); render(); hideLast(); }
       break;
   }
 }
@@ -152,29 +153,22 @@ function thinking(on, run) {
 }
 
 // ------------------------------------------------------------ resumo (ui/summary, retido)
-const list = (title, items) => items && items.length
-  ? `<div><h4>${esc(title)}</h4><ul>${items.map(x => `<li>${x}</li>`).join('')}</ul></div>` : '';
-const host = u => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.hostname : ''; } catch { return ''; } };
+// A mesma tela abre os do Histórico: aqui só mexe nela se ela estiver no último resumo
+let last = null;
 
 function showSummary(s, open) {
-  const sugg = (s.suggestions || []).map(x => `${esc(x.title)}` +
-    (x.url && host(x.url) ? ` — <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(host(x.url))}</a>` : ''));
-  $('summary').querySelector('article').innerHTML =
-    `<button class="close" type="button">Fechar</button>` +
-    `<small>Resumo da conversa · ${Number(s.lines) || 0} frases · ${new Date(s.ts || Date.now()).toLocaleTimeString('pt-BR')}</small>` +
-    `<h2>${esc(s.title || 'Resumo')}</h2><p class="text">${esc(s.summary || '')}</p>` +
-    `<div class="cols">${list('Assuntos', (s.topics || []).map(esc))}${list('Decisões', (s.decisions || []).map(esc))}` +
-    `${list('Próximos passos', (s.next_steps || []).map(esc))}${list(`Sugestões do ${current().name}`, sugg)}</div>`;
-  $('summary').classList.toggle('on', open);
+  const was = last && showing() === last;   // reconectou com a tela no último: troca, sem fechar
+  last = s;
+  if (open || was) openSummary(s);
   $('lastSummary').hidden = false;
 }
-function hideSummary() { $('summary').classList.remove('on'); }
-$('summary').addEventListener('click', e => { if (e.target === $('summary') || e.target.closest('.close')) hideSummary(); });
-$('lastSummary').addEventListener('click', () => $('summary').classList.add('on'));
+function hideLast() { if (last && showing() === last) closeSummary(); }
+$('summary').addEventListener('click', e => { if (e.target === $('summary') || e.target.closest('.close')) closeSummary(); });
+$('lastSummary').addEventListener('click', () => { if (last) openSummary(last); });
 
 export function onMessage(ch, m, retained) {
   if (!m) {                   // retido apagado
-    if (ch === 'ui/summary') { hideSummary(); $('lastSummary').hidden = true; }
+    if (ch === 'ui/summary') { hideLast(); last = null; $('lastSummary').hidden = true; }
     return;
   }
   switch (ch) {

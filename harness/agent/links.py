@@ -79,10 +79,10 @@ def fix_cards(cards: list[dict], links: dict[str, str], log) -> list[dict]:
     for c in cards:
         url = check_url(c.get("url"), c.get("title", ""), links)
         if url != c.get("url"):
-            log.info("link da carta %r: %s -> %s", c.get("title"), c.get("url"), url)
+            log.info("link da carta %s: %s -> %s", c.get("kind"), c.get("url"), url)  # sem o título
         c["url"] = url
         if c.get("kind") in NEEDS_URL and not url:
-            log.info("carta sem link verificado descartada: %r", c.get("title"))
+            log.info("carta %s sem link verificado descartada", c.get("kind"))
             continue
         out.append(c)
     return out

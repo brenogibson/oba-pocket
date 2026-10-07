@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Portal do Oba Pocket: a reunião ao vivo, a placa e os Obas, no celular ou no computador.
+  Portal do Oba Pocket: a reunião ao vivo, o histórico, a placa e os Obas, no celular ou no computador.
   Login no Cognito; o CloudFront serve esta página de um bucket privado e a API de uma
   Lambda que só ele alcança. O config.js é gerado pelo setup.py e vai direto para o bucket.
 -->
@@ -50,6 +50,13 @@
       </aside>
     </section>
 
+    <section id="tab-history" class="tab" hidden>
+      <div class="bar"><span class="muted">Resumos das conversas</span><button id="historyReload" type="button">Atualizar</button></div>
+      <section class="panel"><div id="historyList"></div></section>
+      <p id="historyNote" class="hint"></p>
+      <div class="actions"><button id="historyClear" type="button" class="danger" disabled>Apagar tudo</button></div>
+    </section>
+
     <section id="tab-device" class="tab" hidden>
       <section class="panel"><h3>Placa</h3><div id="deviceInfo"></div></section>
       <section class="panel"><h3>Obas na placa</h3><ul id="deviceObas" class="list"></ul></section>
@@ -81,6 +88,9 @@
     <a href="#reuniao">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
       Reunião</a>
+    <a href="#historico">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v4l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Histórico</a>
     <a href="#placa">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 21h6M12 17v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       Placa</a>

@@ -27,14 +27,16 @@ The code comments, the docs in `docs/` and the device UI are in Brazilian Portug
 - **Follows a meeting:** with REC on, audio goes straight from the device to Amazon
   Transcribe. The agent reads the captions and answers with a bubble right away or with
   an "ace up its sleeve": a rule that fires on the device when someone brings the topic
-  back up. When REC turns off, the summary shows up on the portal.
+  back up. When REC turns off, the summary shows up on the portal and stays in the
+  history for 30 days (`portal.history_days`).
 - **Answers to its name:** with REC on, saying the Oba's name makes it react right
   away and publishes a `wake` event. The agent only wakes up on it if the Oba has
   `{"on": "wake"}` in `agent.triggers`.
 - **Swaps Obas over the air:** the portal (or `tools/oba.py install`) sends an Oba over
   MQTT; the device checks each file's sha256 and asks on screen before installing.
 - **Portal on your phone:** a site with a login shows the captions, the cards and the
-  summary, the device's state and the Obas in the registry, with a preview. It also
+  summary, the summary history, the device's state and the Obas in the registry, with a
+  preview. It also
   takes a new Oba as a zip and removes Obas from the registry. No computer needed.
 - **Approves Claude Code from the device:** the [Claude Code bridge](docs/ponte.md)
   shows on the Oba when Claude is working or waiting for you, and brings permission
@@ -115,9 +117,10 @@ runs on each of the device's cores. You can edit it in draw.io:
   model, abilities, MCP servers from an allow list). Any agent that follows the
   [contract](docs/protocol.md#contrato-roteador--agente) can be an Oba's brain.
 - **Portal** (`portal/`): a site on CloudFront, with a Cognito login, built for the
-  phone. The Meeting tab shows the captions, the cards and the summary. The Device tab
-  shows the state and sends the commands the device's screen offers: activate, remove,
-  play a sound and turn REC off. The Obas tab lists the registry with previews, installs
+  phone. The Meeting tab shows the captions, the cards and the summary. The History tab
+  lists the saved summaries, opens each one, downloads it as Markdown (.md) and deletes
+  them (the summary and the conversation's captions). The Device tab shows the state and sends the commands the
+  device's screen offers: activate, remove, play a sound and turn REC off. The Obas tab lists the registry with previews, installs
   on the device and removes from the registry, and the Upload tab takes a new Oba as a
   zip. The browser only reads the device's topics; everything else goes through the API
   (`portal/api/`). Details in [Portal](#portal).
@@ -151,8 +154,8 @@ site on CloudFront, and its API is a Lambda that only runs when someone uses it.
   the text comes back to the device. Only the final sentences on the `transcript` topic
   go on to the router, through the IoT Rule. The `wake` and `rule.fired` events carry
   the sentence where the name or the word showed up, sometimes still partial.
-- **State doesn't live in the Lambda.** The session, the armed rules and the memory are
-  in DynamoDB, and the Obas are in S3. The Lambda only keeps a short cache of the
+- **State doesn't live in the Lambda.** The session, the armed rules, the memory and the
+  summary history are in DynamoDB, and the Obas are in S3. The Lambda only keeps a short cache of the
   `oba.json`.
 - **The brain is replaceable.** An Oba picks its agent by name from the `agents` catalog
   in `config.json`. It can be another AgentCore runtime
@@ -194,6 +197,15 @@ the AgentCore runtime and the identity pool), and the device's thing is named af
 CloudFront distribution has to be disabled before it can be deleted, and the registry
 bucket keeps versions.
 
+Conversations live in the `<prefix>-sessions` table: each session's events (the
+captions, the cards and the rules) for 7 days, and the summaries for 30
+(`portal.history_days`, 1 to 365). After that, DynamoDB's TTL deletes them, up to a few
+days late. To delete them sooner, use the History tab: one summary or all of them, and
+each one takes its session along. The session that's still recording stays. A summary
+made outside REC goes alone: the device's loose events aren't part of the conversation.
+CloudWatch Logs (30 days) are out of this, but the router and the agent only write the
+technical part there (action types, ids, timings), never the captions or the summary.
+
 ### Portal
 
 From your account, only CloudFront answers the internet. AWS's own endpoints (the
@@ -223,8 +235,9 @@ Cognito login and IoT Core, which the device already uses) are the usual ones.
   portal session lasts that long without asking you to log in again, and "Sair"
   (sign out) revokes it.
 
-Whoever gets into the portal sees the captions and the summary, sends the device
-screen's commands, and uploads, installs and deletes Obas in the registry. Only give
+Whoever gets into the portal sees the captions and the summaries, deletes the history,
+sends the device screen's commands, and uploads, installs and deletes Obas in the
+registry. Only give
 access to people who may do that.
 
 To cut someone off, disable the user and do a global sign-out. `<pool>` is the id of
@@ -319,6 +332,9 @@ On the portal:
 - **Your own domain:** `portal.domain` with `portal.cert_arn` (an ACM certificate in
   us-east-1). Without them, the address is the distribution's `*.cloudfront.net`, which
   still accepts TLS 1.0; with them, CloudFront requires TLS 1.2 or newer.
+- **History:** `portal.history_days` (default 30, 1 to 365) sets how many days each
+  summary stays. It applies to new summaries, and the router is the one saving them:
+  after changing it, run the whole `setup.py`, not just `--portal`.
 - **On the phone:** "Add to Home Screen" opens the portal like an app.
 
 On the agent:

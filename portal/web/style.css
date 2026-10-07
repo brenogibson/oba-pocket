@@ -135,7 +135,17 @@ select:disabled { opacity: .5; }
 #summary h4 { margin: 0 0 6px; color: var(--accent-text); font-size: 14px; text-transform: uppercase; letter-spacing: .06em; }
 #summary ul { margin: 0; padding-left: 20px; }
 #summary a { color: var(--soft); }
-#summary .close { float: right; padding: 6px 12px; font-size: 14px; }
+#summary .tools { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 6px; }
+@media (min-width: 700px) { #summary .tools { float: right; margin: 0 0 0 12px; } }
+#summary .tools button { padding: 6px 12px; font-size: 14px; }
+
+/* ---------- histórico ---------- */
+#historyList .list li { gap: 12px; }
+#historyList .open { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+                     background: none; border-radius: 0; padding: 2px 0; font-size: 16px; text-align: left; }
+#historyList .open b { font-weight: 600; overflow-wrap: anywhere; }
+#historyList .open small { font-size: 13px; }
+#historyList .empty { margin: 0; }
 
 /* ---------- obas e envio ---------- */
 .bar { display: flex; align-items: center; gap: 12px; min-height: 36px; margin-bottom: 10px; }
@@ -190,5 +200,5 @@ dialog menu { display: flex; justify-content: flex-end; gap: 10px; margin: 0; pa
   #transcript { height: auto; min-height: 0; }
   #transcript p { font-size: 26px; }
   #cards { overflow: hidden; min-height: 0; }
-  #tab-device:not([hidden]), #tab-upload:not([hidden]) { max-width: 720px; }
+  #tab-device:not([hidden]), #tab-upload:not([hidden]), #tab-history:not([hidden]) { max-width: 720px; }
 }

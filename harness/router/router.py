@@ -18,6 +18,7 @@ Tabela (pk/sk, TTL em "expires"):
   s#<dev>#<sessão> / e#<ts>#<rnd>    eventos da sessão ("-" = fora do REC)
   s#<dev>#<sessão> / r#<id>          balões e regras (spoken | armed | fired | disarmed | rejected)
   mem#<dev>#<oba>  / memory          memória do Oba nessa placa, entre sessões
+  hist#<dev>       / <ts>#<sessão>   resumo publicado em ui/summary, por HISTORY_DAYS dias (o portal lista e apaga)
 """
 
 import base64
@@ -66,6 +67,7 @@ URL_MAX = 300
 CARD_TEXT_MAX = 600
 CMD_MAX = 14_000         # o buffer MQTT da placa é de 16 KB
 UI_MAX = 64_000
+HIST_MAX = 64 * 1024     # resumo no histórico, em bytes (o item do DynamoDB vai até 400 KB)
 SHEET_MAX = 48 * 1024    # folha idle que vai em base64 no ui/oba
 OUTLINE_MAX = 256        # pontos do rig (OBA_OUTLINE_MAX em src/oba.h)
 UI_OBA_FORMAT = 3        # mudou o que vai no ui/oba: sai de novo para todas as placas
@@ -101,6 +103,15 @@ def log(*a):
     print(*a, flush=True)
 
 
+def brief(out) -> str:
+    """O que o agente devolveu, sem o texto: o log fica mais que a conversa apagada no portal."""
+    acts = out.get("actions") if isinstance(out, dict) else None
+    acts = acts if isinstance(acts, list) else []
+    kinds = [f"{a.get('type')}/{a['channel']}" if isinstance(a.get("channel"), str) else str(a.get("type"))
+             for a in acts[:MAX_ACTIONS] if isinstance(a, dict)]
+    return f"{len(acts)} ações [{', '.join(k[:40] for k in kinds)}]"
+
+
 def expires() -> int:
     return int(time.time()) + KEEP_S
 
@@ -117,6 +128,9 @@ def clamp(v, lo, hi, default=None):
     if math.isnan(v):
         return default
     return max(lo, min(hi, v))
+
+
+HISTORY_DAYS = int(clamp(os.environ.get("HISTORY_DAYS"), 1, 365, 30))  # resumos no histórico do portal
 
 
 # ------------------------------------------------------------------ mensagens
@@ -141,8 +155,10 @@ def send(dev: str, type_: str, **kw) -> bool:
     return True
 
 
-def ui(dev: str, channel: str, data: dict, retain: bool = False):
-    publish(dev, f"ui/{channel}", {**data, "v": 1, "type": channel, "ts": now_ms()}, retain)
+def ui(dev: str, channel: str, data: dict, retain: bool = False) -> dict:
+    msg = {**data, "v": 1, "type": channel, "ts": now_ms()}
+    publish(dev, f"ui/{channel}", msg, retain)
+    return msg
 
 
 def valid_url(url) -> str | None:
@@ -490,7 +506,7 @@ def invoke(target: dict, dev: str, sid: str, req: dict) -> dict:
         r = agentcore.invoke_agent_runtime(agentRuntimeArn=target["arn"], runtimeSessionId=session,
                                            payload=body, contentType="application/json", accept="application/json")
         out = json.loads(r["response"].read())
-    log(f"agente {req['run']} em {time.time() - started:.1f}s:", json.dumps(out, ensure_ascii=False)[:1500])
+    log(f"agente {req['run']} em {time.time() - started:.1f}s:", brief(out))
     return out if isinstance(out, dict) else {}
 
 
@@ -670,9 +686,40 @@ def publish_ui(dev: str, oba: str, sid: str, a: dict):
         log("ui grande demais:", ch)
         return
     retain = bool(a.get("retain"))
-    ui(dev, ch, msg, retain)
+    sent = ui(dev, ch, msg, retain)
     if retain:
         table.update_item(Key=dev_key(dev), UpdateExpression="ADD retained :c", ExpressionAttributeValues={":c": {ch}})
+    if ch == "summary" and data:
+        save_summary(dev, sid, sent)
+
+
+def fit(obj, text: int, items: int):
+    """Corta os textos e as listas em qualquer lugar do JSON."""
+    if isinstance(obj, dict):
+        return {k: fit(v, text, items) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [fit(v, text, items) for v in obj[:items]]
+    return obj[:text] if isinstance(obj, str) else obj
+
+
+def save_summary(dev: str, sid: str, msg: dict):
+    """O resumo publicado em ui/summary também vai para o histórico do portal, por HISTORY_DAYS
+    dias. sk = <ts>#<sessão> ("-" = fora do REC); o portal apaga o resumo e a sessão juntos."""
+    for text, items in ((None, None), (4000, 50), (1000, 20), (300, 10)):
+        body = msg if text is None else fit(msg, text, items)
+        raw = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+        if len(raw.encode()) <= HIST_MAX:
+            break
+    else:
+        log("resumo grande demais para o histórico, não guardei:", sid)
+        return
+    try:
+        table.put_item(Item={
+            "pk": f"hist#{dev}", "sk": f"{msg['ts']:013d}#{sid}", "ts": msg["ts"], "session": sid,
+            "title": str(body.get("title") or "")[:200], "lines": int(clamp(body.get("lines"), 0, 1e6, 0)),
+            "oba": str(body.get("oba") or "")[:31], "summary": raw, "expires": int(time.time()) + HISTORY_DAYS * 86400})
+    except ClientError as e:  # o resumo já saiu: sem o histórico, a rodada segue
+        log("histórico não gravou:", e.response["Error"]["Code"])
 
 
 def apply_actions(dev: str, oba: str, sid: str, rec: bool, run_name: str, actions: list, all_rules: list,
@@ -693,11 +740,11 @@ def apply_actions(dev: str, oba: str, sid: str, rec: bool, run_name: str, action
             rid, card = clean_id(a.get("id"), "s"), clean_card(a.get("card"))
             if send(dev, "speak", id=rid, bubble=b, **({"card": card} if card else {})):
                 save_rule(dev, sid, rid, "spoken", card)
-                log(f"fala {rid} {b['kind']}: {b['text'][:80]}")
+                log(f"fala {rid} {b['kind']}")
         elif t == "arm":
             rule = clean_rule(a, rec)
             if not rule:
-                log("regra recusada:", json.dumps(a, ensure_ascii=False)[:300])
+                log("regra recusada:", str(a.get("on") or "speech")[:40])
                 continue
             rid, card = clean_id(a.get("id"), "c"), clean_card(a.get("card"))
             if rid in armed:
@@ -709,7 +756,7 @@ def apply_actions(dev: str, oba: str, sid: str, rec: bool, run_name: str, action
             if send(dev, "arm", id=rid, **rule, **({"card": card} if card else {})):
                 save_rule(dev, sid, rid, "armed", card, rule)
                 armed.append(rid)
-                log(f"regra {rid} {rule['on']} {rule.get('words', '')}: {(card or {}).get('title')}")
+                log(f"regra {rid} {rule['on']}")
         elif t == "disarm":
             rid = a.get("id")
             if rid in armed:
@@ -872,7 +919,7 @@ def on_evt(dev: str, msg: dict, ctx):
     sid = current_session(get_device(dev))
     if ev["type"] == "rule.fired" and isinstance(ev.get("id"), str):
         set_rule(dev, sid, ev["id"], "fired")
-        log("regra disparou:", ev["id"], ev.get("trigger") or ev.get("on"))
+        log("regra disparou:", ev["id"], ev.get("on"))  # a palavra (trigger) é da conversa: fora do log
     store_event(dev, sid, ev)
     dispatch(dev, msg.get("oba"), ev, sid, ctx)
 

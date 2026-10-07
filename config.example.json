@@ -22,6 +22,7 @@
   "portal": {
     "users": [{"username": "voce", "email": "voce@exemplo.com"}],
     "domain": null,
-    "cert_arn": null
+    "cert_arn": null,
+    "history_days": 30
   }
 }

@@ -62,6 +62,7 @@ CRED_SECONDS = 3600        # credenciais do Transcribe na placa
 ROUTER_TIMEOUT = 600       # até 3 rodadas do agente numa invocação (harness/router)
 ROUTER_CONCURRENCY = 5
 LOG_DAYS = 30
+HISTORY_DAYS = 30          # resumos no histórico do portal (portal.history_days)
 MODEL_GEOS = {"us", "eu", "apac", "jp", "au", "ca", "global"}  # prefixos de perfis de inferência
 VOCAB_WORD = re.compile(r"^[A-Za-zÀ-ÖØ-öø-ÿ]+(?:-[A-Za-zÀ-ÖØ-öø-ÿ]+)*$")  # letras e hífen, sem dígitos
 
@@ -282,8 +283,12 @@ def upload_obas(obas: dict):
         note("Oba", name, "criado" if r["new"] else "atualizado" if r["sent"] else "mantido")
 
 
+def table_name() -> str:
+    return f"{P}-sessions"
+
+
 def ensure_table() -> str:
-    name = f"{P}-sessions"
+    name = table_name()
     try:
         arn = ddb.describe_table(TableName=name)["Table"]["TableArn"]
         status = "mantido"
@@ -794,7 +799,8 @@ def ensure_router(table_arn: str, agents: dict, data_endpoint: str) -> str:
             print("  aviso: sem ícones; rode tools/fetch_icons.py --url <zip novo> e o setup.py de novo")
     files = [ROUTER_SRC / "router.py", ROUTER_SRC / "icons.py", *icons]
     env = {"PREFIX": P, "TABLE": table_arn.split("/")[-1], "BUCKET": BUCKET, "IOT_ENDPOINT": data_endpoint,
-           "AGENTS": json.dumps(agents, separators=(",", ":")), "URL_HOSTS": ",".join(CFG.get("url_hosts") or [])}
+           "AGENTS": json.dumps(agents, separators=(",", ":")), "URL_HOSTS": ",".join(CFG.get("url_hosts") or []),
+           "HISTORY_DAYS": history_days()}
     conf = dict(Role=role, Handler="router.handler", Runtime="python3.13", Timeout=ROUTER_TIMEOUT, MemorySize=256,
                 Environment={"Variables": env}, Description="Oba Pocket: eventos da placa -> gatilhos -> agente -> comandos")
     # Frases chegando juntas não precisam de muitas cópias
@@ -861,7 +867,16 @@ def portal_cfg(cfg: dict) -> dict:
             fail("portal.users: troque o usuário de exemplo pelo seu (o convite vai para o email)")
     if bool(pc.get("domain")) != bool(pc.get("cert_arn")):
         fail("portal: \"domain\" e \"cert_arn\" (ACM em us-east-1) vão juntos")
+    days = HISTORY_DAYS if pc.get("history_days") is None else pc["history_days"]
+    if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 365:
+        fail(f"portal.history_days: quantos dias o histórico guarda os resumos, de 1 a 365 (padrão {HISTORY_DAYS})")
     return pc
+
+
+def history_days() -> str:
+    """portal.history_days, para o roteador (guarda) e a API (mostra)."""
+    days = (CFG.get("portal") or {}).get("history_days")
+    return str(HISTORY_DAYS if days is None else days)
 
 
 def ensure_portal_bucket() -> str:
@@ -1089,6 +1104,7 @@ def lambda_logs(fn: str) -> list:
 
 
 def portal_api_role(fn: str, installer: str) -> str:
+    table = f"arn:aws:dynamodb:{REGION}:{ACCOUNT}:table/{table_name()}"
     return ensure_role(fn, lambda_trust(), doc(
         *lambda_logs(fn),
         # "*" de propósito: na Service Authorization Reference, o AttachPolicy só tem cert e thinggroup
@@ -1105,6 +1121,21 @@ def portal_api_role(fn: str, installer: str) -> str:
               Condition={"StringLike": {"s3:prefix": ["obas/*"]}}),
         allow("Registry", ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], f"arn:aws:s3:::{BUCKET}/obas/*"),
         allow("Installer", "lambda:InvokeFunction", installer),
+        # Histórico: na tabela do roteador, só os resumos e as sessões desta placa. O Null
+        # recusa pedido sem pk (o ForAllValues passaria com a lista vazia). O BatchWriteItem
+        # também deixa gravar (PutRequest) nessas pk, e nenhuma condition key separa: a API só apaga
+        allow("History", ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem"],
+              table, Condition={"ForAllValues:StringLike": {"dynamodb:LeadingKeys": [f"hist#{DEV}", f"s#{DEV}#*"]},
+                                "Null": {"dynamodb:LeadingKeys": "false"}}),
+        # Só o REC e a sessão da placa: a API não apaga a sessão que está gravando
+        allow("Recording", "dynamodb:GetItem", table, Condition={
+            "ForAllValues:StringEquals": {"dynamodb:LeadingKeys": [f"dev#{DEV}"],
+                                          "dynamodb:Attributes": ["pk", "sk", "rec", "session"]},
+            "StringEqualsIfExists": {"dynamodb:Select": "SPECIFIC_ATTRIBUTES"},
+            "Null": {"dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false"}}),
+        # Apagar um resumo tira o ui/summary retido, se for dele
+        allow("Summary", ["iot:GetRetainedMessage", "iot:Publish", "iot:RetainPublish"],
+              f"{IOT_ARN}:topic/{P}/{DEV}/ui/summary"),
     ), "Oba Pocket: API do portal")
 
 
@@ -1169,7 +1200,7 @@ def ensure_portal_api(pool: str, client: str, pid: str, data_ep: str, installer:
     role = portal_api_role(fn, installer)
     env = {"USER_POOL": pool, "CLIENT_ID": client, "IDENTITY_POOL": pid, "VIEWER_POLICY": f"{P}-portal-viewer",
            "JWKS": jwks(pool), "IOT_ENDPOINT": data_ep, "PREFIX": P, "DEVICE": DEV, "BUCKET": BUCKET,
-           "INSTALLER": installer}
+           "INSTALLER": installer, "TABLE": table_name(), "HISTORY_DAYS": history_days()}
     conf = dict(Role=role, Handler="api.handler", Runtime="python3.13", Timeout=PORTAL_TIMEOUT, MemorySize=512,
                 Environment={"Variables": env}, Description="Oba Pocket: API do portal (atrás do CloudFront)")
     arn = ensure_function(fn, portal_sha(), portal_zip, conf, PORTAL_CONCURRENCY)
